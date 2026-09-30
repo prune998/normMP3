@@ -134,26 +134,34 @@ func reencode(path string, gainDB float64, limit bool, progress ProgressFn) (Lev
 	if err != nil {
 		return Level{}, fmt.Errorf("audio: tags: %w", err)
 	}
-	defer orig.Close()
+	tag := id3v2.NewEmptyTag()
+	for id, frames := range orig.AllFrames() {
+		for _, fr := range frames {
+			tag.AddFrame(id, fr)
+		}
+	}
+	orig.Close()
 
 	src, err := os.Open(path)
 	if err != nil {
 		return Level{}, err
 	}
-	defer src.Close()
 
 	dec, err := mp3dec.NewDecoder(src)
 	if err != nil {
+		src.Close()
 		return Level{}, fmt.Errorf("audio: %s: %w", filepath.Base(path), err)
 	}
 	sr := dec.SampleRate()
 	an, err := rgain.NewAnalyzer(sr)
 	if err != nil {
+		src.Close()
 		return Level{}, err
 	}
 
 	tmp, err := os.CreateTemp(dir, ".normmp3-*.mp3")
 	if err != nil {
+		src.Close()
 		return Level{}, err
 	}
 	tmpName := tmp.Name()
@@ -163,20 +171,15 @@ func reencode(path string, gainDB float64, limit bool, progress ProgressFn) (Lev
 	}
 
 	w := bufio.NewWriterSize(tmp, 256*1024)
-
-	tag := id3v2.NewEmptyTag()
-	for id, frames := range orig.AllFrames() {
-		for _, fr := range frames {
-			tag.AddFrame(id, fr)
-		}
-	}
 	if _, err := tag.WriteTo(w); err != nil {
+		src.Close()
 		cleanup()
 		return Level{}, err
 	}
 
 	enc := mp3enc.NewEncoder(sr, 2)
 	if err := setBitrate(enc, encodeBitrateKbps); err != nil {
+		src.Close()
 		cleanup()
 		return Level{}, err
 	}
@@ -238,10 +241,12 @@ func reencode(path string, gainDB float64, limit bool, progress ProgressFn) (Lev
 			break
 		}
 		if rerr != nil {
+			src.Close()
 			cleanup()
 			return Level{}, rerr
 		}
 	}
+	src.Close()
 
 	if len(pass) > 0 {
 		tail := pass
