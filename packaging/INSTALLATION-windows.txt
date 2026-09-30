@@ -1,0 +1,28 @@
+Installation — Windows
+======================
+
+1. Décompressez l'archive où vous voulez (par exemple dans
+   C:\Program Files\NormMP3 ou sur le bureau).
+2. Double-cliquez sur normmp3.exe.
+
+Fichiers de travail
+-------------------
+L'application crée, dans le dossier depuis lequel elle est lancée :
+
+  memo.txt                 mémorisation du gain cible
+  Fichiers_normalises/     copies normalisées de vos fichiers
+
+Pour travailler dans un dossier précis, mettez un raccourci vers
+normmp3.exe dans votre dossier de musique, ou lancez-la depuis une
+invite de commandes ouverte dans ce dossier :
+
+  cd C:\Users\vous\Musique\mes-mp3
+  normmp3.exe
+
+Utilisation
+-----------
+1. Fichiers ▸ Choisir les fichiers : sélectionnez un ou plusieurs MP3
+   (les fichiers sont copiés dans Fichiers_normalises/).
+2. Action ▸ Analyse : mesure des niveaux.
+3. Action ▸ Traitement : normalisation au gain cible.
+4. Action ▸ Choix du gain cible : 85 à 93 dB (89 par défaut).

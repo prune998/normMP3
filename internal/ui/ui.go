@@ -37,6 +37,7 @@ type row struct {
 }
 
 var S = struct {
+	version  string
 	cwd      string
 	outDir   string
 	target   float64
@@ -61,8 +62,9 @@ var brw = struct {
 	sel: map[string]bool{},
 }
 
-func Run() {
-	S.cwd, _ = os.Getwd()
+func Run(version string) {
+	S.version = version
+	S.cwd = workDir()
 	S.outDir = filepath.Join(S.cwd, "Fichiers_normalises")
 	loadMemo()
 	brw.cwd = homeDir()
@@ -114,7 +116,7 @@ func menubar() {
 		MenuButton(NoIcon, "A propos ...", func() {
 			if MenuItem(NoIcon, "Infos") {
 				showMsg("A propos de l'application",
-					"Application de normalisation des fichiers MP3\nPortage Go (shirei) de l'application Tkinter originale\nAuteur original : Elie Couzinié")
+					"Application de normalisation des fichiers MP3\nPortage Go (shirei) de l'application Tkinter originale\nAuteur original : Elie Couzinié\nVersion : "+S.version)
 			}
 			MenuSeparator()
 			if MenuItem(NoIcon, "Lisez-moi ...") {
@@ -353,6 +355,29 @@ func loadMemo() {
 
 func saveMemo() {
 	os.WriteFile(filepath.Join(S.cwd, "memo.txt"), []byte(fmt.Sprintf("%v", S.target)), 0o644)
+}
+
+func workDir() string {
+	cwd, err := os.Getwd()
+	if err == nil && cwdWritable(cwd) {
+		return cwd
+	}
+	home, herr := os.UserHomeDir()
+	if herr != nil {
+		return cwd
+	}
+	return home
+}
+
+func cwdWritable(dir string) bool {
+	f, err := os.CreateTemp(dir, ".normmp3-write-*")
+	if err != nil {
+		return false
+	}
+	name := f.Name()
+	f.Close()
+	os.Remove(name)
+	return true
 }
 
 func homeDir() string {
