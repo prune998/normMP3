@@ -31,6 +31,9 @@ go.work.sum
 # .idea/
 # .vscode/
 
+source
+normmp3
+
 # Compilation et paquets
 build/
 dist/
