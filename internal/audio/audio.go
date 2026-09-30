@@ -14,8 +14,8 @@ import (
 	"os"
 	"path/filepath"
 
-	mp3enc "github.com/braheezy/shine-mp3/pkg/mp3"
 	"github.com/bogem/id3v2/v2"
+	mp3enc "github.com/braheezy/shine-mp3/pkg/mp3"
 	mp3dec "github.com/hajimehoshi/go-mp3"
 
 	"github.com/prune998/normMP3/internal/rgain"
@@ -26,10 +26,10 @@ const (
 	// reference mp3gain uses.
 	RefLevel = 89.0
 	// ClipSample is the first amplitude value considered clipping.
-	ClipSample = 32767
-	granuleSize = 576
+	ClipSample        = 32767
+	granuleSize       = 576
 	encodeBitrateKbps = 64
-	limiterCeilDB = -2.0
+	limiterCeilDB     = -2.0
 )
 
 var ErrNoSamples = errors.New("audio: file contains no decodable audio")
@@ -42,7 +42,8 @@ type Level struct {
 	Clipping bool
 }
 
-type progressFn = func(fraction float64)
+// ProgressFn reports completion of the current file as a fraction in [0,1].
+type ProgressFn = func(fraction float64)
 
 func levelFrom(gainRec float64, maxAmp int) Level {
 	return Level{
@@ -54,7 +55,7 @@ func levelFrom(gainRec float64, maxAmp int) Level {
 }
 
 // AnalyzeFile decodes path and returns its ReplayGain level and peak.
-func AnalyzeFile(path string, progress progressFn) (Level, error) {
+func AnalyzeFile(path string, progress ProgressFn) (Level, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return Level{}, err
@@ -115,18 +116,18 @@ func AnalyzeFile(path string, progress progressFn) (Level, error) {
 // peak limiting: clipping may occur, mirroring the "volume" ffmpeg filter
 // behavior of the original app. Returns the level measured on the applied
 // (unclipped-domain) signal, equivalent to re-running mp3gain on the output.
-func ApplyGainFile(path string, gainDB float64, progress progressFn) (Level, error) {
+func ApplyGainFile(path string, gainDB float64, progress ProgressFn) (Level, error) {
 	return reencode(path, gainDB, false, progress)
 }
 
 // LoudNormFile re-encodes path with the given gain in dB and a soft-knee
 // peak limiter at -2 dBFS, approximating ffmpeg's
 // loudnorm=I=-(112-cible):TP=-2:LRA=7 pass of the original app.
-func LoudNormFile(path string, gainDB float64, progress progressFn) (Level, error) {
+func LoudNormFile(path string, gainDB float64, progress ProgressFn) (Level, error) {
 	return reencode(path, gainDB, true, progress)
 }
 
-func reencode(path string, gainDB float64, limit bool, progress progressFn) (Level, error) {
+func reencode(path string, gainDB float64, limit bool, progress ProgressFn) (Level, error) {
 	dir := filepath.Dir(path)
 
 	orig, err := id3v2.Open(path, id3v2.Options{Parse: true})
