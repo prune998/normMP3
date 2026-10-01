@@ -1,0 +1,30 @@
+Installation — macOS
+====================
+
+1. Décompressez l'archive (double-clic).
+2. Glissez NormMP3.app dans le dossier Applications.
+3. Premier lancement : clic droit sur NormMP3.app ▸ Ouvrir
+   (l'application n'est pas distribuée via l'App Store ; acceptez
+   « Ouvrir » si macOS la signale).
+
+Fichiers de travail
+-------------------
+L'application crée, dans le dossier courant au démarrage :
+
+  memo.txt                 mémorisation du gain cible
+  Fichiers_normalises/     copies normalisées de vos fichiers
+
+Lancée depuis le Finder, elle utilise votre dossier personnel.
+Pour travailler dans un dossier précis (par exemple un dossier
+« Musique » contenant vos MP3), lancez-la depuis un terminal :
+
+  cd /chemin/vers/mes/mp3
+  open -a NormMP3
+
+Utilisation
+-----------
+1. Fichiers ▸ Choisir les fichiers : sélectionnez un ou plusieurs MP3
+   (les fichiers sont copiés dans Fichiers_normalises/).
+2. Action ▸ Analyse : mesure des niveaux.
+3. Action ▸ Traitement : normalisation au gain cible.
+4. Action ▸ Choix du gain cible : 85 à 93 dB (89 par défaut).

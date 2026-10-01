@@ -1,0 +1,30 @@
+Installation — Linux
+====================
+
+1. Décompressez l'archive :
+
+     tar xzf NormMP3-<version>-linux-<arch>.tar.gz
+
+2. Lancez l'application depuis un terminal, dans le dossier qui
+   contient vos MP3 :
+
+     cd ~/Musique/mes-mp3
+     /chemin/vers/NormMP3/normmp3
+
+Fichiers de travail
+-------------------
+L'application crée, dans le dossier courant au démarrage :
+
+  memo.txt                 mémorisation du gain cible
+  Fichiers_normalises/     copies normalisées de vos fichiers
+
+Utilisation
+-----------
+1. Fichiers ▸ Choisir les fichiers : sélectionnez un ou plusieurs MP3
+   (les fichiers sont copiés dans Fichiers_normalises/).
+2. Action ▸ Analyse : mesure des niveaux.
+3. Action ▸ Traitement : normalisation au gain cible.
+4. Action ▸ Choix du gain cible : 85 à 93 dB (89 par défaut).
+
+Dépendances d'affichage : Wayland (ou X11) ; en l'absence de GPU, un
+rendu logiciel est utilisé automatiquement.
