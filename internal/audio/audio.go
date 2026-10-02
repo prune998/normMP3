@@ -177,13 +177,18 @@ func reencode(path string, gainDB float64, limit bool, progress ProgressFn) (Lev
 		return Level{}, err
 	}
 
-	enc := mp3enc.NewEncoder(sr, 2)
+	channels := 2
+	if c, cerr := Channels(path); cerr == nil && (c == 1 || c == 2) {
+		channels = c
+	}
+
+	enc := mp3enc.NewEncoder(sr, channels)
 	if err := setBitrate(enc, encodeBitrateKbps); err != nil {
 		src.Close()
 		cleanup()
 		return Level{}, err
 	}
-	perPass := int(enc.Mpeg.GranulesPerFrame) * granuleSize * 2
+	perPass := int(enc.Mpeg.GranulesPerFrame) * granuleSize * channels
 	pass := make([]int16, 0, perPass)
 	quant := make([]float64, 0, perPass)
 
@@ -209,6 +214,9 @@ func reencode(path string, gainDB float64, limit bool, progress ProgressFn) (Lev
 		q := int16(math.Round(x))
 		pass = append(pass, q)
 		quant = append(quant, float64(q))
+		if channels == 1 {
+			quant = append(quant, float64(q))
+		}
 		if len(pass) == perPass {
 			an.Add(quant)
 			flushPass(w, enc, pass)
@@ -221,17 +229,32 @@ func reencode(path string, gainDB float64, limit bool, progress ProgressFn) (Lev
 		n, rerr := dec.Read(buf)
 		if n > 0 {
 			read += int64(n)
-			for i := 0; i+1 < n; i += 2 {
-				v := float64(int16(uint16(buf[i]) | uint16(buf[i+1])<<8))
-				x := v * factor
-				if limit {
-					if x > th {
-						x = th + (full-th)*math.Tanh((x-th)/(full-th))
-					} else if x < -th {
-						x = -th - (full-th)*math.Tanh((-x-th)/(full-th))
+			if channels == 1 {
+				for i := 0; i+3 < n; i += 4 {
+					v := float64(int16(uint16(buf[i]) | uint16(buf[i+1])<<8))
+					x := v * factor
+					if limit {
+						if x > th {
+							x = th + (full-th)*math.Tanh((x-th)/(full-th))
+						} else if x < -th {
+							x = -th - (full-th)*math.Tanh((-x-th)/(full-th))
+						}
 					}
+					store(x)
 				}
-				store(x)
+			} else {
+				for i := 0; i+1 < n; i += 2 {
+					v := float64(int16(uint16(buf[i]) | uint16(buf[i+1])<<8))
+					x := v * factor
+					if limit {
+						if x > th {
+							x = th + (full-th)*math.Tanh((x-th)/(full-th))
+						} else if x < -th {
+							x = -th - (full-th)*math.Tanh((-x-th)/(full-th))
+						}
+					}
+					store(x)
+				}
 			}
 			if progress != nil && total > 0 {
 				progress(math.Min(1, float64(read)/float64(total)))
@@ -250,12 +273,13 @@ func reencode(path string, gainDB float64, limit bool, progress ProgressFn) (Lev
 
 	if len(pass) > 0 {
 		tail := pass
-		ql := quant
 		for len(tail) < perPass {
 			tail = append(tail, 0)
-			ql = append(ql, 0)
+			for k := 0; k < channels; k++ {
+				quant = append(quant, 0)
+			}
 		}
-		an.Add(ql)
+		an.Add(quant)
 		flushPass(w, enc, tail)
 	}
 

@@ -161,7 +161,8 @@ Mac non signées, rien de spécifique à NormMP3.
   depuis ce dossier (voir le `INSTALLATION.txt` livré avec chaque
   archive).
 - Le ré-encodage se fait à 64 kbps, comme l'application d'origine. La
-  fréquence d'échantillonnage des sources est conservée.
+  fréquence d'échantillonnage des sources est conservée et **les
+  fichiers mono restent mono** (pas de conversion en stéréo).
 - Les originaux ne sont jamais modifiés : tout se passe dans
   `Fichiers_normalises/`.
 

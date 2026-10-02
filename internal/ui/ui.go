@@ -239,6 +239,12 @@ func cardHeader(title, sub string) ContainerId {
 	})
 }
 
+// visibleScrollBar draws the panel scrollbar with a visible track so the
+// scroll affordance stays obvious with long file lists (thumb is drag-ready).
+func visibleScrollBar() ContainerId {
+	return ScrollBarExt(ScrollBarAttrs{TrackBG: Vec4{0, 0, 50, 0.10}})
+}
+
 func mutedText() Vec4 {
 	c := CurrentColorScheme.Surfaces.Panel.Text
 	return Vec4{c[0], c[1], c[2], c[3] * 0.62}
@@ -267,14 +273,14 @@ func tablePanel() {
 			return
 		}
 
-		Container(Attrs(Grow(1), Expand, Clip), func() {
+		Container(Attrs(Grow(1), Expand, Extrinsic, Clip), func() {
 			ScrollOnInput()
 			tableHeader()
 			for i, r := range S.rows {
 				r := r
 				tableRow(i, r)
 			}
-			ScrollBars()
+			visibleScrollBar()
 		})
 	})
 }
@@ -392,7 +398,7 @@ func selectionPanel() {
 			return
 		}
 
-		Container(Attrs(Grow(1), Expand, Clip), func() {
+		Container(Attrs(Grow(1), Expand, Extrinsic, Clip), func() {
 			ScrollOnInput()
 			for _, r := range S.rows {
 				r := r
@@ -420,7 +426,7 @@ func selectionPanel() {
 					}
 				})
 			}
-			ScrollBars()
+			visibleScrollBar()
 		})
 		Container(Attrs(Row, CrossMid, Pad2(8, 12), Gap(6), Background(0, 0, 50, 0.04)), func() {
 			Label("Clic : écouter le fichier", FontSize(11), TextColorVec(mutedText()))
@@ -625,7 +631,7 @@ func renderModals() {
 							"Les balises ID3 (titre, artiste, pochette…) sont conservées.",
 							"L'analyse et le traitement peuvent être relancés autant de fois que besoin.")
 					})
-					ScrollBars()
+					visibleScrollBar()
 				})
 				Container(Attrs(Row, MainAlign(AlignEnd), Pad2(6, 0)), func() {
 					NextButtonType(ButtonPrimary)
@@ -722,7 +728,7 @@ func renderBrowser() {
 						}
 					})
 				}
-				ScrollBars()
+				visibleScrollBar()
 			})
 			Container(Attrs(Row, CrossMid, Gap(10)), func() {
 				Label(fmt.Sprintf("%d fichier(s) sélectionné(s)", len(brw.sel)), FontSize(12.5), FontWeight(WeightBold))

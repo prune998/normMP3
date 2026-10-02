@@ -147,7 +147,8 @@ NormMP3.
   home folder. To work on a specific music folder, start the app from
   that folder (see the `INSTALLATION.txt` shipped with each archive).
 - Re-encoding happens at 64 kbps, like the original application. The
-  sample rate of the source is preserved.
+  sample rate of the source is preserved and **mono files stay mono**
+  (no stereo conversion).
 - Originals are never modified: everything happens inside
   `Fichiers_normalises/`.
 

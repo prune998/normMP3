@@ -25,6 +25,10 @@ func genSine(sr int, seconds float64, freq, amp float64) []int16 {
 }
 
 func writeTestMP3(t *testing.T, path string, sr int, pcm []int16, withTags bool) {
+	writeTestMP3Ch(t, path, sr, pcm, 2, withTags)
+}
+
+func writeTestMP3Ch(t *testing.T, path string, sr int, pcm []int16, channels int, withTags bool) {
 	t.Helper()
 	f, err := os.Create(path)
 	if err != nil {
@@ -42,11 +46,14 @@ func writeTestMP3(t *testing.T, path string, sr int, pcm []int16, withTags bool)
 		}
 	}
 
-	enc := mp3enc.NewEncoder(sr, 2)
+	enc := mp3enc.NewEncoder(sr, channels)
 	if err := setBitrate(enc, encodeBitrateKbps); err != nil {
 		t.Fatal(err)
 	}
-	perPass := int(enc.Mpeg.GranulesPerFrame) * granuleSize * 2
+	perPass := int(enc.Mpeg.GranulesPerFrame) * granuleSize * channels
+	if channels == 1 {
+		perPass = int(enc.Mpeg.GranulesPerFrame) * granuleSize
+	}
 	for i := 0; i < len(pcm); i += perPass {
 		end := i + perPass
 		pad := false
@@ -195,6 +202,74 @@ func TestLoudNorm(t *testing.T) {
 	}
 	if after.MaxAmp > ClipSample {
 		t.Errorf("maxAmp %d exceeds full scale", after.MaxAmp)
+	}
+}
+
+func TestMonoStaysMono(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "m.mp3")
+	sr := 44100
+
+	n := sr * 2
+	pcm := make([]int16, 2*n)
+	for i := 0; i < n; i++ {
+		v := int16(math.Round(12000 * math.Sin(2*math.Pi*997*float64(i)/float64(sr))))
+		pcm[2*i] = v
+		pcm[2*i+1] = v
+	}
+	writeTestMP3Ch(t, path, sr, pcm, 1, false)
+
+	ch, err := Channels(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ch != 1 {
+		t.Fatalf("test source should be mono, header says %d", ch)
+	}
+
+	before, err := AnalyzeFile(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := ApplyGainFile(path, -1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(after.Loudness-(before.Loudness-1)) > 0.8 {
+		t.Errorf("mono gain: loudness %.3f, want ~%.3f", after.Loudness, before.Loudness-1)
+	}
+
+	ch, err = Channels(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ch != 1 {
+		t.Fatalf("re-encoded file should stay mono, header says %d", ch)
+	}
+}
+
+func TestStereoStaysStereo(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s.mp3")
+	sr := 44100
+	writeTestMP3(t, path, sr, genSine(sr, 2, 997, 0.5), false)
+
+	ch, err := Channels(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ch != 2 {
+		t.Fatalf("stereo source should report 2 channels, got %d", ch)
+	}
+	if _, err := LoudNormFile(path, -2, nil); err != nil {
+		t.Fatal(err)
+	}
+	ch, err = Channels(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ch != 2 {
+		t.Fatalf("re-encoded file should stay stereo, got %d", ch)
 	}
 }
 
