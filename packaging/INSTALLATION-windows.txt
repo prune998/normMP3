@@ -7,10 +7,17 @@ Installation — Windows
 
 Fichiers de travail
 -------------------
-L'application crée, dans le dossier depuis lequel elle est lancée :
+Préférences (dans le dossier de démarrage) :
 
   memo.txt                 mémorisation du gain cible
-  Fichiers_normalises/     copies normalisées de vos fichiers
+  normmp3.conf             thème clair/sombre
+
+Fichiers normalisés : chaque MP3 importé est copié dans un dossier
+« Fichiers_normalises » créé dans le dossier d'origine du fichier ;
+les originaux ne sont jamais modifiés.
+
+Lecteur : cliquez sur un fichier de la liste « Sélection » pour
+l'écouter (lecture/pause, ±10 s).
 
 Pour travailler dans un dossier précis, mettez un raccourci vers
 normmp3.exe dans votre dossier de musique, ou lancez-la depuis une

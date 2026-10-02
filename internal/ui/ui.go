@@ -19,7 +19,10 @@ import (
 	app "go.hasen.dev/shirei/app"
 	. "go.hasen.dev/shirei/widgets"
 
+	shireiAudio "go.hasen.dev/shirei/audio"
+
 	"github.com/prune998/normMP3/internal/audio"
+	"github.com/prune998/normMP3/internal/player"
 )
 
 type row struct {
@@ -40,7 +43,6 @@ type row struct {
 var S = struct {
 	version  string
 	cwd      string
-	outDir   string
 	target   float64
 	rows     []*row
 	busy     bool
@@ -53,10 +55,15 @@ var S = struct {
 	mMsg     string
 	gainBuf  float32
 	dark     bool
+	plyr     *player.Player
 }{
 	target: 89.0,
 	modal:  "",
 }
+
+const outDirName = "Fichiers_normalises"
+
+var audioNote string
 
 var brw = struct {
 	cwd    string
@@ -69,13 +76,28 @@ var brw = struct {
 func Run(version string) {
 	S.version = version
 	S.cwd = workDir()
-	S.outDir = filepath.Join(S.cwd, "Fichiers_normalises")
 	loadMemo()
 	loadConf()
 	SetDarkMode(S.dark)
 	brw.cwd = S.cwd
 
+	mixer := shireiAudio.NewMixer()
+	S.plyr = player.New(mixer)
+	if err := app.StartAudio(player.OutRate, mixer.Fill); err != nil {
+		audioNote = err.Error()
+	}
+
 	app.SetupWindow("NormMP3 — Normalisation de fichiers MP3", 1280, 720)
+
+	go func() {
+		for {
+			time.Sleep(150 * time.Millisecond)
+			if S.plyr.State().Playing {
+				RequestNextFrame()
+			}
+		}
+	}()
+
 	app.Run(RootView)
 }
 
@@ -180,6 +202,11 @@ func topBar() {
 			Label("Cible", FontSize(12), TextColorVec(CurrentColorScheme.Surfaces.Canvas.Text))
 			Label(fmt.Sprintf("%.1f dB", S.target), FontSize(12.5), FontWeight(WeightBold), TextColorVec(CurrentColorScheme.Surfaces.Canvas.Text))
 		})
+
+		NextButtonAttrs(ButtonAttrs{})
+		if CtrlButton(SymInfo, "Aide", true) {
+			S.modal = "aide"
+		}
 
 		NextButtonAttrs(ButtonAttrs{})
 		if S.dark {
@@ -332,8 +359,8 @@ func emptyState() {
 			Icon(SymAudio, FontSize(30), TextColor(210, 55, 42, 1))
 		})
 		Label("Aucun fichier sélectionné", FontSize(15), FontWeight(WeightBold))
-		Label("Choisissez des fichiers MP3 : ils seront copiés dans", FontSize(12.5), TextColorVec(mutedText()))
-		Label("Fichiers_normalises et normalisés au gain cible.", FontSize(12.5), TextColorVec(mutedText()))
+		Label("Choisissez des fichiers MP3 : chacun sera copié dans un dossier", FontSize(12.5), TextColorVec(mutedText()))
+		Label(outDirName+" créé à côté de l'original, puis normalisé au gain cible.", FontSize(12.5), TextColorVec(mutedText()))
 		Container(Attrs(FixHeight(6)), func() {})
 		NextButtonType(ButtonPrimary)
 		if Button(SymFolder, "Choisir les fichiers") {
@@ -361,6 +388,7 @@ func selectionPanel() {
 				Label("La liste des fichiers", FontSize(12), TextColorVec(mutedText()))
 				Label("s'affichera ici.", FontSize(12), TextColorVec(mutedText()))
 			})
+			playerCard()
 			return
 		}
 
@@ -372,8 +400,11 @@ func selectionPanel() {
 					if IsHovered() {
 						ModAttrs(Background(210, 50, 50, 0.07))
 					}
-					if IsDoubleClicked() {
-						openWithDefault(r.path)
+					if st := S.plyr.State(); st.Path == r.path {
+						ModAttrs(Background(210, 60, 45, 0.12))
+					}
+					if IsClicked() {
+						S.plyr.Load(r.path)
 					}
 					Icon(SymAudio, FontSize(13), TextColorVec(mutedText()))
 					Container(Attrs(Grow(1), Clip), func() {
@@ -392,9 +423,62 @@ func selectionPanel() {
 			ScrollBars()
 		})
 		Container(Attrs(Row, CrossMid, Pad2(8, 12), Gap(6), Background(0, 0, 50, 0.04)), func() {
-			Label("Double clic : écouter un fichier", FontSize(11), TextColorVec(mutedText()))
+			Label("Clic : écouter le fichier", FontSize(11), TextColorVec(mutedText()))
+		})
+		playerCard()
+	})
+}
+
+func playerCard() {
+	st := S.plyr.State()
+	Container(Attrs(Pad2(10, 12), Gap(8), Background(0, 0, 50, 0.04)), func() {
+		Container(Attrs(Row, CrossMid, Gap(6)), func() {
+			Icon(SymAudio, FontSize(12), TextColorVec(mutedText()))
+			Container(Attrs(Grow(1), Clip), func() {
+				name := "Aucun fichier"
+				if st.Ready {
+					name = filepath.Base(st.Path)
+				}
+				Label(name, FontSize(11.5), TextColorVec(mutedText()))
+			})
+			if st.Ready {
+				Label(fmt.Sprintf("%s / %s", fmtTime(st.Pos), fmtTime(st.Dur)),
+					FontSize(11), TextColorVec(mutedText()))
+			}
+		})
+		Container(Attrs(Row, CrossMid, Gap(8)), func() {
+			NextButtonAttrs(ButtonAttrs{Disabled: !st.Ready})
+			if CtrlButton(SymPrev, "-10 s", true) {
+				S.plyr.SeekBy(-10 * player.OutRate)
+			}
+			NextButtonAttrs(ButtonAttrs{Type: ButtonPrimary, Disabled: !st.Ready})
+			if st.Playing {
+				if CtrlButton(SymPause, "Pause", true) {
+					S.plyr.Pause()
+				}
+			} else {
+				if CtrlButton(SymPlay, "Écouter", true) {
+					S.plyr.Play()
+				}
+			}
+			NextButtonAttrs(ButtonAttrs{Disabled: !st.Ready})
+			if CtrlButton(SymNext, "+10 s", true) {
+				S.plyr.SeekBy(10 * player.OutRate)
+			}
+			Container(Attrs(Grow(1), CrossMid), func() {
+				frac := float32(0)
+				if st.Dur > 0 {
+					frac = float32(st.Pos) / float32(st.Dur)
+				}
+				ProgressBar(frac)
+			})
 		})
 	})
+}
+
+func fmtTime(frames int64) string {
+	s := frames / player.OutRate
+	return fmt.Sprintf("%d:%02d", s/60, s%60)
 }
 
 // --------------------------------------------------------------- bottom bar
@@ -420,7 +504,7 @@ func bottomBar() {
 				}
 			}
 			if done == n {
-				Label(fmt.Sprintf("Terminé — %d fichier(s) normalisé(s) dans %s", n, filepath.Base(S.outDir)),
+				Label(fmt.Sprintf("Terminé — %d fichier(s) normalisé(s) dans le dossier %s de chaque dossier d'origine", n, outDirName),
 					FontSize(12.5), TextColor(130, 55, 32, 1))
 			} else {
 				Label(fmt.Sprintf("%d fichier(s) prêt(s) — gain cible %.1f dB", n, S.target),
@@ -502,6 +586,55 @@ func renderModals() {
 		})
 	case "browser":
 		renderBrowser()
+	case "aide":
+		style := ModalStyleForScheme(CurrentColorScheme)
+		ModalStyled(720, closeModal, style, func() {
+			Container(Attrs(Pad(20), Gap(10)), func() {
+				Label("Comment fonctionne NormMP3", FontSize(16), FontWeight(WeightBold))
+				Container(Attrs(Grow(1), Expand, Clip, FixHeight(430)), func() {
+					ScrollOnInput()
+					Container(Attrs(Gap(10)), func() {
+						helpSection("Le principe",
+							"L'application mesure le niveau sonore réel de chaque fichier MP3 (algorithme "+
+								"ReplayGain, comme mp3gain) puis le ramène au gain cible : 89 dB par défaut.",
+							"Tous les fichiers se retrouvent ainsi au même niveau d'écoute, sans écrêtage "+
+								"grâce au limiteur de crêtes intégré.")
+						helpSection("Comment l'utiliser",
+							"1. Bouton « Choisir les fichiers » : sélectionnez un ou plusieurs MP3 "+
+								"(clic : cocher, Maj+clic : plage, Cmd/Ctrl+clic : basculer).",
+							"2. « Analyse » : mesure le niveau de chaque fichier.",
+							"3. « Traitement » : corrige chaque fichier selon l'écart au gain cible "+
+								"(rien à faire, amplification simple, ou normalisation selon l'ampleur).",
+							"4. « Cible » : ajustez le gain cible de 85 à 93 dB ; l'analyse est relancée.")
+						helpSection("Où sont créés les fichiers ?",
+							"Vos originaux ne sont JAMAIS modifiés.",
+							"Chaque fichier importé est copié dans un dossier « "+outDirName+" » créé "+
+								"dans le dossier d'origine du fichier : c'est cette copie qui est analysée "+
+								"et normalisée.",
+							"Exemple : /Musique/Album/mon-morceau.mp3 est traité dans "+
+								"/Musique/Album/"+outDirName+"/mon-morceau.mp3.",
+							"Deux petits fichiers de préférences sont créés à côté de l'application : "+
+								"memo.txt (gain cible) et normmp3.conf (thème).")
+						helpSection("Le lecteur intégré",
+							"Cliquez sur un fichier de la liste « Sélection » pour l'écouter.",
+							"Les boutons -10 s et +10 s déplacent la lecture, et le bouton central "+
+								"démarre ou met en pause. La lecture porte sur le fichier normalisé "+
+								"depuis son dossier "+outDirName+".")
+						helpSection("Bon à savoir",
+							"Les fichiers sont ré-encodés en 64 kbps (comme dans l'application d'origine).",
+							"Les balises ID3 (titre, artiste, pochette…) sont conservées.",
+							"L'analyse et le traitement peuvent être relancés autant de fois que besoin.")
+					})
+					ScrollBars()
+				})
+				Container(Attrs(Row, MainAlign(AlignEnd), Pad2(6, 0)), func() {
+					NextButtonType(ButtonPrimary)
+					if Button(NoIcon, "Fermer") {
+						closeModal()
+					}
+				})
+			})
+		})
 	case "quit":
 		style := ModalStyleForScheme(CurrentColorScheme)
 		ModalStyled(560, closeModal, style, func() {
@@ -633,6 +766,20 @@ func validerGain(v float64) {
 
 func closeModal() { S.modal = "" }
 
+func helpSection(title string, lines ...string) {
+	Container(Attrs(Gap(4)), func() {
+		Label(title, FontSize(13.5), FontWeight(WeightBold), TextColor(210, 60, 38, 1))
+		for _, line := range lines {
+			Container(Attrs(Row, Gap(6)), func() {
+				Container(Attrs(FixWidth(10), CrossMid), func() {
+					Label("•", FontSize(12), TextColorVec(mutedText()))
+				})
+				Label(line, FontSize(12.5))
+			})
+		}
+	})
+}
+
 func showMsg(title, msg string) {
 	S.modal = "msg"
 	S.mKind = "info"
@@ -715,22 +862,6 @@ func homeDir() string {
 		return S.cwd
 	}
 	return h
-}
-
-func listMP3(dir string) []string {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	var out []string
-	for _, e := range entries {
-		n := e.Name()
-		if e.Type().IsRegular() && (strings.HasSuffix(n, ".mp3") || strings.HasSuffix(n, ".MP3")) {
-			out = append(out, filepath.Join(dir, n))
-		}
-	}
-	sort.Strings(out)
-	return out
 }
 
 // --------------------------------------------------------- file browser
@@ -842,34 +973,47 @@ func choisirFichiers() {
 	sort.Strings(picked)
 
 	for _, p := range picked {
-		if filepath.Dir(p) == S.outDir {
-			showError("ERREUR", "VOUS NE POUVEZ PAS SELECTIONNER LE DOSSIER DES FICHIERS DEJA NORMALISES\nVEUILLEZ CHOISIR UN AUTRE DOSSIER OU FAIRE UNE COPIE DE VOS FICHIERS A NORMALISER")
+		if filepath.Base(filepath.Dir(p)) == outDirName {
+			showError("ERREUR", "VOUS NE POUVEZ PAS SELECTIONNER LES FICHIERS DEJA NORMALISES\n(ils se trouvent déjà dans un dossier "+outDirName+")\nVEUILLEZ CHOISIR VOS FICHIERS ORIGINAUX")
 			return
 		}
 	}
 	closeModal()
 
-	if err := os.MkdirAll(S.outDir, 0o755); err != nil {
-		showError("ERREUR", err.Error())
-		return
-	}
-	entries, _ := os.ReadDir(S.outDir)
-	for _, e := range entries {
-		if e.Type().IsRegular() {
-			os.Remove(filepath.Join(S.outDir, e.Name()))
-		}
-	}
+	S.plyr.Load("")
+
+	groups := make(map[string][]string)
 	for _, p := range picked {
-		dst := filepath.Join(S.outDir, filepath.Base(p))
-		if err := copyFile(p, dst); err != nil {
-			showError("ERREUR", "Copie impossible: "+err.Error())
-			return
-		}
+		d := filepath.Dir(p)
+		groups[d] = append(groups[d], p)
 	}
+	dirs := make([]string, 0, len(groups))
+	for d := range groups {
+		dirs = append(dirs, d)
+	}
+	sort.Strings(dirs)
 
 	S.rows = nil
-	for _, p := range listMP3(S.outDir) {
-		S.rows = append(S.rows, &row{path: p, name: filepath.Base(p)})
+	for _, d := range dirs {
+		outDir := filepath.Join(d, outDirName)
+		if err := os.MkdirAll(outDir, 0o755); err != nil {
+			showError("ERREUR", err.Error())
+			return
+		}
+		entries, _ := os.ReadDir(outDir)
+		for _, e := range entries {
+			if e.Type().IsRegular() {
+				os.Remove(filepath.Join(outDir, e.Name()))
+			}
+		}
+		for _, p := range groups[d] {
+			dst := filepath.Join(outDir, filepath.Base(p))
+			if err := copyFile(p, dst); err != nil {
+				showError("ERREUR", "Copie impossible: "+err.Error())
+				return
+			}
+			S.rows = append(S.rows, &row{path: dst, name: filepath.Base(dst)})
+		}
 	}
 	startAnalyse()
 }
@@ -963,15 +1107,11 @@ func startAnalyse() {
 		return
 	}
 
-	files := listMP3(S.outDir)
-	if len(files) == 0 {
-		showError("ERREUR", "AUCUNE SELECTION DE FICHIERS")
-		return
-	}
-
-	S.rows = S.rows[:0]
-	for _, p := range files {
-		S.rows = append(S.rows, &row{path: p, name: filepath.Base(p)})
+	for _, r := range S.rows {
+		if _, err := os.Stat(r.path); err != nil {
+			showError("ERREUR", "Fichier introuvable: "+r.path+"\nEffacez la sélection et choisissez à nouveau vos fichiers.")
+			return
+		}
 	}
 
 	go func() {
@@ -1055,6 +1195,7 @@ func startTraitement() {
 				total += r.size
 			}
 		}
+		S.plyr.Load("")
 		frameUpdate(func() {
 			S.busy = true
 			S.busyKnd = "traitement"
@@ -1153,7 +1294,7 @@ func startTraitement() {
 				showError("ERREUR", "Traitement interrompu:\n"+failed)
 			} else {
 				showMsg("INFORMATION", "Traitement terminé.\n\nDurée totale du traitement : "+duree+
-					"\n\nVous pouvez utiliser les fichiers maintenant normalisés\nqui se trouvent dans le dossier :\n\n"+strings.ToUpper(S.outDir))
+					"\n\nVous pouvez utiliser les fichiers maintenant normalisés\ncopiés dans le dossier "+outDirName+"\nde chaque dossier d'origine.")
 			}
 		})
 	}()

@@ -19,8 +19,9 @@ compiled with CGO disabled.
 ## How it works
 
 1. **Files ▸ Choose files** — pick one or more MP3 files in the built-in
-   browser. They are *copied* into a `Fichiers_normalises/` folder created
-   next to the working files, so the originals are never touched.
+   browser. Each one is *copied* into a `Fichiers_normalises/` folder
+   created **inside the folder containing the original file**, so the
+   originals are never touched.
 2. **Action ▸ Analysis** — each file is decoded and measured with the
    ReplayGain 1.0 algorithm (equal-loudness filtered RMS, 95th
    percentile). The table shows the level (Niveau), the target (Cible)
@@ -36,9 +37,17 @@ compiled with CGO disabled.
    Changing it re-runs the analysis. The value is remembered in a
    `memo.txt` file.
 
+A **? Help** button in the toolbar opens an in-app guide (in French)
+covering all of this: how the app works, how to use it, and exactly
+where the normalized MP3s are written.
+
 During analysis and processing a progress bar and a status line show
-where things stand. Double-clicking a file in the right-hand list opens
-it with your system's default player.
+where things stand.
+
+A **built-in player** sits below the selection list: click a file in the
+list to load its normalized copy, then play/pause it and jump **±10
+seconds** with the seek buttons — no external player needed. (Double-click
+to open your system player is gone; the built-in player replaces it.)
 
 The ID3v2 tags of the files (title, artist, album, artwork…) are
 carried over to the re-encoded files.
@@ -129,11 +138,14 @@ NormMP3.
 
 ## Usage notes
 
-- The app keeps its working files (`memo.txt` and `Fichiers_normalises/`)
-  in the folder it is started from. Launched from the Finder (macOS) or
-  by double-click (Windows), it falls back to your home folder. To work
-  on a specific music folder, start the app from that folder (see the
-  `INSTALLATION.txt` shipped with each archive).
+- Normalized copies land in a `Fichiers_normalises/` folder created next
+  to each original file — import from several folders and each keeps its
+  own normalized set.
+- The app keeps its preference files (`memo.txt` target gain,
+  `normmp3.conf` theme) in the folder it is started from. Launched from
+  the Finder (macOS) or by double-click (Windows), it falls back to your
+  home folder. To work on a specific music folder, start the app from
+  that folder (see the `INSTALLATION.txt` shipped with each archive).
 - Re-encoding happens at 64 kbps, like the original application. The
   sample rate of the source is preserved.
 - Originals are never modified: everything happens inside

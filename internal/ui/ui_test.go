@@ -6,12 +6,15 @@ import (
 	"testing"
 
 	. "go.hasen.dev/shirei"
+	shireiAudio "go.hasen.dev/shirei/audio"
+
+	"github.com/prune998/normMP3/internal/player"
 )
 
 func TestHeadlessRender(t *testing.T) {
 	dir := t.TempDir()
 	S.cwd = dir
-	S.outDir = filepath.Join(dir, "Fichiers_normalises")
+	S.plyr = player.New(shireiAudio.NewMixer())
 	S.rows = nil
 	S.busy = false
 	S.modal = ""

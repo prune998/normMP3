@@ -19,9 +19,9 @@ pour macOS (Intel, Apple Silicon et universel), Windows et Linux
 ## Fonctionnement
 
 1. **Fichiers ▸ Choisir les fichiers** — sélectionnez un ou plusieurs
-   MP3 dans le navigateur intégré. Ils sont *copiés* dans un dossier
-   `Fichiers_normalises/` créé à côté des fichiers de travail : les
-   originaux ne sont jamais modifiés.
+   MP3 dans le navigateur intégré. Chaque fichier est *copié* dans un
+   dossier `Fichiers_normalises/` créé **dans le dossier qui contient le
+   fichier original** : les originaux ne sont jamais modifiés.
 2. **Action ▸ Analyse** — chaque fichier est décodé et mesuré avec
    l'algorithme ReplayGain 1.0 (RMS filtré égalisation
    psychoacoustique, 95e percentile). Le tableau affiche le niveau
@@ -41,9 +41,18 @@ pour macOS (Intel, Apple Silicon et universel), Windows et Linux
    0,5 dB. Le modifier relance l'analyse. La valeur est mémorisée dans
    un fichier `memo.txt`.
 
+Un bouton **? Aide** dans la barre d'outils ouvre un guide intégré (en
+français) qui explique tout cela : le fonctionnement, l'utilisation et
+l'emplacement exact des MP3 normalisés.
+
 Pendant l'analyse et le traitement, une barre de progression et une
-ligne d'état indiquent l'avancement. Un double clic sur un fichier de
-la liste de droite l'ouvre avec le lecteur par défaut du système.
+ligne d'état indiquent l'avancement.
+
+Un **lecteur intégré** se trouve sous la liste « Sélection » : cliquez
+sur un fichier pour charger sa copie normalisée, puis lecture/pause et
+déplacement **±10 secondes** avec les boutons prévus — aucun lecteur
+externe nécessaire. (Le double clic vers le lecteur du système a été
+remplacé par ce lecteur intégré.)
 
 Les balises ID3v2 des fichiers (titre, artiste, album, pochette…) sont
 reportées sur les fichiers ré-encodés.
@@ -141,12 +150,16 @@ Mac non signées, rien de spécifique à NormMP3.
 
 ## Remarques d'utilisation
 
-- L'application conserve ses fichiers de travail (`memo.txt` et
-  `Fichiers_normalises/`) dans le dossier depuis lequel elle démarre.
-  Lancée depuis le Finder (macOS) ou par double-clic (Windows), elle
-  utilise votre dossier personnel en secours. Pour travailler sur un
-  dossier musical précis, démarrez l'application depuis ce dossier
-  (voir le `INSTALLATION.txt` livré avec chaque archive).
+- Les copies normalisées sont placées dans un dossier
+  `Fichiers_normalises/` créé à côté de chaque fichier original :
+  importez depuis plusieurs dossiers, chacun garde son lot normalisé.
+- L'application conserve ses fichiers de préférences (`memo.txt` gain
+  cible, `normmp3.conf` thème) dans le dossier depuis lequel elle
+  démarre. Lancée depuis le Finder (macOS) ou par double-clic
+  (Windows), elle utilise votre dossier personnel en secours. Pour
+  travailler sur un dossier musical précis, démarrez l'application
+  depuis ce dossier (voir le `INSTALLATION.txt` livré avec chaque
+  archive).
 - Le ré-encodage se fait à 64 kbps, comme l'application d'origine. La
   fréquence d'échantillonnage des sources est conservée.
 - Les originaux ne sont jamais modifiés : tout se passe dans
