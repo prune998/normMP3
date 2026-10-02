@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/braheezy/shine-mp3/pkg/mp3"
+	mp3enc "github.com/prune998/normMP3/internal/mp3enc"
 	"go.hasen.dev/shirei/audio"
 )
 
@@ -32,7 +32,7 @@ func writeTestMP3(t *testing.T, path string, sr int, pcm []int16) {
 	defer f.Close()
 	w := bufio.NewWriterSize(f, 128*1024)
 
-	enc := mp3.NewEncoder(sr, 2)
+	enc := mp3enc.NewEncoder(sr, 2)
 	perPass := int(enc.Mpeg.GranulesPerFrame) * 576 * 2
 	for i := 0; i < len(pcm); i += perPass {
 		end := i + perPass

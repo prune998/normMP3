@@ -15,8 +15,8 @@ import (
 	"path/filepath"
 
 	"github.com/bogem/id3v2/v2"
-	mp3enc "github.com/braheezy/shine-mp3/pkg/mp3"
 	mp3dec "github.com/hajimehoshi/go-mp3"
+	mp3enc "github.com/prune998/normMP3/internal/mp3enc"
 
 	"github.com/prune998/normMP3/internal/rgain"
 )

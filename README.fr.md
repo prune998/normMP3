@@ -193,7 +193,7 @@ machine).
 | Interface | [shirei](https://pkg.go.dev/go.hasen.dev/shirei) v0.8.0 — immediate mode, multiplateforme, Go pur (Metal/D3D11/GLES via purego, rendu logiciel en repli) |
 | Décodage MP3 | [hajimehoshi/go-mp3](https://pkg.go.dev/github.com/hajimehoshi/go-mp3) (Go pur) |
 | Analyse de loudness | ReplayGain 1.0, porté depuis `gain_analysis.c` (Robinson/Sawyer/Klemm), validé contre la référence C compilée |
-| Ré-encodage | [braheezy/shine-mp3](https://pkg.go.dev/github.com/braheezy/shine-mp3) (port de l'encodeur à virgule fixe Shine), 64 kbps |
+| Ré-encodage | Port Go de l'encodeur Shine à virgule fixe (vendu dans `internal/mp3enc`, LGPL-2.0), 64 kbps — avec une correction locale du side-info mono MPEG-1 absente de l'amont (les fichiers mono produits par l'encodeur original sont invalides) |
 | Balises | [bogem/id3v2/v2](https://pkg.go.dev/github.com/bogem/id3v2/v2) — reportées lors du ré-encodage |
 
 L'étape de « normalisation » approche le `loudnorm=I=-(112-cible):TP=-2:LRA=7`

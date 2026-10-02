@@ -177,7 +177,7 @@ Mac for `lipo`, `codesign` and `ditto`), `make dist-windows`,
 | GUI | [shirei](https://pkg.go.dev/go.hasen.dev/shirei) v0.8.0 — immediate-mode, cross-platform, pure Go (Metal/D3D11/GLES via purego, software fallback) |
 | MP3 decoding | [hajimehoshi/go-mp3](https://pkg.go.dev/github.com/hajimehoshi/go-mp3) (pure Go) |
 | Loudness analysis | ReplayGain 1.0, ported from `gain_analysis.c` (Robinson/Sawyer/Klemm), validated against the compiled C reference |
-| Re-encoding | [braheezy/shine-mp3](https://pkg.go.dev/github.com/braheezy/shine-mp3) (Shine fixed-point encoder port), 64 kbps |
+| Re-encoding | Shine fixed-point encoder port (vendored in `internal/mp3enc`, LGPL-2.0), 64 kbps — with a local fix for MPEG-1 mono side-info that upstream lacks (mono files encoded by the stock encoder are invalid) |
 | Tags | [bogem/id3v2/v2](https://pkg.go.dev/github.com/bogem/id3v2/v2) — frames carried over on re-encode |
 
 The "loudness normalization" stage approximates ffmpeg's
