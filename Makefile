@@ -23,9 +23,16 @@ LDFLAGS   := -X main.version=$(VERSION)
 PKG       := ./cmd/normmp3
 HOST_OS   := $(shell $(GO) env GOOS)
 
+# Le traitement audio utilise un ffmpeg statique embarqué dans le binaire ;
+# les archives sont téléchargées une fois par machine (voir le script).
+FFMPEG_BINS := $(wildcard internal/ffmpeg/bin/*.xz)
+
+ffmpeg-bins: ## Télécharge les ffmpeg statiques à embarquer (si absent)
+	@scripts/fetch-ffmpeg.sh all
+
 .DEFAULT_GOAL := help
 
-.PHONY: help run build test vet fmt check clean distclean dist \
+.PHONY: help run build test vet fmt check clean distclean dist ffmpeg-bins \
 	dist-macos dist-macos-intel dist-macos-silicon dist-macos-universal \
 	dist-windows dist-windows-amd64 dist-windows-arm64 \
 	dist-linux dist-linux-amd64 dist-linux-arm64 \
@@ -47,12 +54,12 @@ version: ## Affiche la version qui sera compilée
 
 # ----------------------------------------------------------- développement
 
-run: ## Lance l'application
+run: ffmpeg-bins ## Lance l'application
 	$(GO) run -ldflags "$(LDFLAGS)" $(PKG)
 
 build: $(BUILD_DIR)/$(BIN) ## Compile pour cette machine (build/)
 
-$(BUILD_DIR)/$(BIN): $(shell find . -name '*.go') go.mod go.sum
+$(BUILD_DIR)/$(BIN): $(shell find . -name '*.go') go.mod go.sum $(FFMPEG_BINS)
 	@mkdir -p $(BUILD_DIR)
 	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o $@ $(PKG)
 
@@ -65,7 +72,7 @@ vet: ## Analyse statique
 fmt: ## Reformate le code
 	gofmt -w .
 
-check: ## Vérifie le format, l'analyse statique et les tests
+check: ffmpeg-bins ## Vérifie le format, l'analyse statique et les tests
 	@if [ -n "$$(gofmt -l .)" ]; then \
 		echo "gofmt : fichiers à reformater :"; gofmt -l .; exit 1; \
 	fi
@@ -108,17 +115,17 @@ define macos_package
 	@echo "  → $(DIST_DIR)/$(APP)-$(VERSION)-macos-$(1).zip"
 endef
 
-dist-macos: dist-macos-intel dist-macos-silicon dist-macos-universal ## Paquets macOS (Intel, Apple Silicon, universel)
+dist-macos: dist-macos-intel dist-macos-silicon dist-macos-universal ffmpeg-bins ## Paquets macOS (Intel, Apple Silicon, universel)
 
-dist-macos-intel: ## Paquet macOS Intel (.zip)
+dist-macos-intel: ffmpeg-bins ## Paquet macOS Intel (.zip)
 	$(call macos_binary,amd64)
 	$(call macos_package,intel,$(BUILD_DIR)/macos/$(BIN)-amd64)
 
-dist-macos-silicon: ## Paquet macOS Apple Silicon (.zip)
+dist-macos-silicon: ffmpeg-bins ## Paquet macOS Apple Silicon (.zip)
 	$(call macos_binary,arm64)
 	$(call macos_package,apple-silicon,$(BUILD_DIR)/macos/$(BIN)-arm64)
 
-dist-macos-universal: ## Paquet macOS universel Intel + Apple Silicon (.zip)
+dist-macos-universal: ffmpeg-bins ## Paquet macOS universel Intel + Apple Silicon (.zip)
 	$(call macos_binary,amd64)
 	$(call macos_binary,arm64)
 	lipo -create -output $(BUILD_DIR)/macos/$(BIN)-universal \
@@ -143,12 +150,12 @@ define windows_package
 	@echo "  → $(DIST_DIR)/$(APP)-$(VERSION)-windows-$(1).zip"
 endef
 
-dist-windows: dist-windows-amd64 dist-windows-arm64 ## Paquets Windows (x86-64 et ARM64)
+dist-windows: ffmpeg-bins dist-windows-amd64 dist-windows-arm64 ## Paquets Windows (x86-64 et ARM64)
 
-dist-windows-amd64: ## Paquet Windows x86-64 (.zip)
+dist-windows-amd64: ffmpeg-bins ## Paquet Windows x86-64 (.zip)
 	$(call windows_package,amd64)
 
-dist-windows-arm64: ## Paquet Windows ARM64 (.zip)
+dist-windows-arm64: ffmpeg-bins ## Paquet Windows ARM64 (.zip)
 	$(call windows_package,arm64)
 
 # ------------------------------------------------------------------ Linux
@@ -166,17 +173,17 @@ define linux_package
 	@echo "  → $(DIST_DIR)/$(APP)-$(VERSION)-linux-$(1).tar.gz"
 endef
 
-dist-linux: dist-linux-amd64 dist-linux-arm64 ## Paquets Linux (x86-64 et ARM64)
+dist-linux: ffmpeg-bins dist-linux-amd64 dist-linux-arm64 ## Paquets Linux (x86-64 et ARM64)
 
-dist-linux-amd64: ## Paquet Linux x86-64 (.tar.gz)
+dist-linux-amd64: ffmpeg-bins ## Paquet Linux x86-64 (.tar.gz)
 	$(call linux_package,amd64)
 
-dist-linux-arm64: ## Paquet Linux ARM64 (.tar.gz)
+dist-linux-arm64: ffmpeg-bins ## Paquet Linux ARM64 (.tar.gz)
 	$(call linux_package,arm64)
 
 # ------------------------------------------------------------------- tout
 
-dist: dist-windows dist-linux ## Construit tous les paquets possibles sur cette machine
+dist: dist-windows dist-linux ffmpeg-bins ## Construit tous les paquets possibles sur cette machine
 ifeq ($(HOST_OS),darwin)
 dist: dist-macos
 endif

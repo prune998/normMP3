@@ -1,12 +1,12 @@
-// Package audio implements the pure-Go MP3 analysis and processing
-// pipeline: decode (go-mp3), ReplayGain loudness analysis (internal/rgain),
-// gain/loudnorm processing and re-encode (shine-mp3), with ID3v2 tag
-// preservation. It replaces the mp3gain.exe + ffmpeg.exe external tools
-// used by the original Python application.
+// Package audio implements the analysis and processing pipeline of the
+// application: loudness is measured in pure Go with a ReplayGain 1.0
+// analyzer (the same algorithm as mp3gain, validated against the C
+// reference), and the files are re-encoded with the original
+// application's ffmpeg commands (volume / loudnorm, -ar 44100 -ab 64k),
+// using the ffmpeg binary embedded by internal/ffmpeg.
 package audio
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -14,10 +14,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/bogem/id3v2/v2"
 	mp3dec "github.com/hajimehoshi/go-mp3"
-	mp3enc "github.com/prune998/normMP3/internal/mp3enc"
 
+	"github.com/prune998/normMP3/internal/ffmpeg"
 	"github.com/prune998/normMP3/internal/rgain"
 )
 
@@ -26,10 +25,9 @@ const (
 	// reference mp3gain uses.
 	RefLevel = 89.0
 	// ClipSample is the first amplitude value considered clipping.
-	ClipSample        = 32767
-	granuleSize       = 576
-	encodeBitrateKbps = 64
-	limiterCeilDB     = -2.0
+	ClipSample = 32767
+	// bitrateKbps matches the original application's ffmpeg "-ab 64k".
+	bitrateKbps = "64k"
 )
 
 var ErrNoSamples = errors.New("audio: file contains no decodable audio")
@@ -98,12 +96,13 @@ func AnalyzeFile(path string, progress ProgressFn) (Level, error) {
 				progress(math.Min(1, float64(read)/float64(total)))
 			}
 		}
-		if rerr == io.EOF {
+		if rerr == nil {
+			continue
+		}
+		if errors.Is(rerr, io.EOF) {
 			break
 		}
-		if rerr != nil {
-			return Level{}, rerr
-		}
+		return Level{}, rerr
 	}
 
 	if read == 0 {
@@ -112,228 +111,95 @@ func AnalyzeFile(path string, progress ProgressFn) (Level, error) {
 	return levelFrom(an.Gain(), maxAmp), nil
 }
 
-// ApplyGainFile re-encodes path with the given gain in dB, without any
-// peak limiting: clipping may occur, mirroring the "volume" ffmpeg filter
-// behavior of the original app. Returns the level measured on the applied
-// (unclipped-domain) signal, equivalent to re-running mp3gain on the output.
-func ApplyGainFile(path string, gainDB float64, progress ProgressFn) (Level, error) {
-	return reencode(path, gainDB, false, progress)
-}
-
-// LoudNormFile re-encodes path with the given gain in dB and a soft-knee
-// peak limiter at -2 dBFS, approximating ffmpeg's
-// loudnorm=I=-(112-cible):TP=-2:LRA=7 pass of the original app.
-func LoudNormFile(path string, gainDB float64, progress ProgressFn) (Level, error) {
-	return reencode(path, gainDB, true, progress)
-}
-
-func reencode(path string, gainDB float64, limit bool, progress ProgressFn) (Level, error) {
-	dir := filepath.Dir(path)
-
-	orig, err := id3v2.Open(path, id3v2.Options{Parse: true})
-	if err != nil {
-		return Level{}, fmt.Errorf("audio: tags: %w", err)
+// ApplyGainFile re-encodes path with the original application's ffmpeg
+// volume pass (volume=<gain>dB -ar 44100 -ab 64k), then re-measures the
+// file (as the original re-ran mp3gain). peakAmp is the source peak from
+// the analysis; the clipping flag is raised when the gain would push it
+// past full scale, which is what mp3gain's float decode reports.
+func ApplyGainFile(path string, gainDB float64, peakAmp int, progress ProgressFn) (Level, error) {
+	tmp := filepath.Join(filepath.Dir(path), ".normmp3-tmp.mp3")
+	os.Remove(tmp)
+	args := []string{
+		"-y", "-hide_banner", "-loglevel", "error", "-progress", "pipe:1",
+		"-i", path,
+		"-filter:a", fmt.Sprintf("volume=%.2fdB", gainDB),
+		"-ar", "44100", "-ab", bitrateKbps,
+		tmp,
 	}
-	tag := id3v2.NewEmptyTag()
-	for id, frames := range orig.AllFrames() {
-		for _, fr := range frames {
-			tag.AddFrame(id, fr)
-		}
-	}
-	orig.Close()
-
-	src, err := os.Open(path)
-	if err != nil {
-		return Level{}, err
-	}
-
-	dec, err := mp3dec.NewDecoder(src)
-	if err != nil {
-		src.Close()
+	durUs := probeDurationMicros(path)
+	if err := ffmpeg.RunProgress(args, durUs, progress); err != nil {
+		os.Remove(tmp)
 		return Level{}, fmt.Errorf("audio: %s: %w", filepath.Base(path), err)
 	}
+	lv, err := replaceAndMeasure(tmp, path)
+	if err != nil {
+		return Level{}, err
+	}
+	if peakAmp > 0 && float64(peakAmp)*math.Pow(10, gainDB/20) > float64(ClipSample) {
+		lv.Clipping = true
+	}
+	return lv, nil
+}
+
+// LoudNormFile re-encodes path with the original application's
+// loudness-normalization pass:
+//
+//	ffmpeg -i <f> -filter:a loudnorm=I=-(112-target):TP=-2:LRA=7 -ar 44100 -ab 64k
+//
+// then re-measures the file.
+func LoudNormFile(path string, target float64, progress ProgressFn) (Level, error) {
+	targetI := -(112.0 - target)
+	tmp := filepath.Join(filepath.Dir(path), ".normmp3-tmp.mp3")
+	os.Remove(tmp)
+	args := []string{
+		"-y", "-hide_banner", "-loglevel", "error", "-progress", "pipe:1",
+		"-i", path,
+		"-filter:a", fmt.Sprintf("loudnorm=I=%.2f:TP=-2:LRA=7", targetI),
+		"-ar", "44100", "-ab", bitrateKbps,
+		tmp,
+	}
+	durUs := probeDurationMicros(path)
+	if err := ffmpeg.RunProgress(args, durUs, progress); err != nil {
+		os.Remove(tmp)
+		return Level{}, fmt.Errorf("audio: %s: %w", filepath.Base(path), err)
+	}
+	return replaceAndMeasure(tmp, path)
+}
+
+// replaceAndMeasure renames tmp over path and measures the result with the
+// ReplayGain analyzer (the original re-ran mp3gain on the output).
+func replaceAndMeasure(tmp, path string) (Level, error) {
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return Level{}, err
+	}
+	lv, err := AnalyzeFile(path, nil)
+	if err != nil {
+		return Level{}, err
+	}
+	return lv, nil
+}
+
+// probeDurationMicros estimates the file duration in microseconds (from the
+// Xing/Info length when present, else a 128 kbps size estimate), for the
+// ffmpeg progress fraction.
+func probeDurationMicros(path string) int64 {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+	dec, err := mp3dec.NewDecoder(f)
+	if err != nil {
+		return 0
+	}
 	sr := dec.SampleRate()
-	an, err := rgain.NewAnalyzer(sr)
+	if n := dec.Length(); n > 0 {
+		return n / 4 * int64(1e6) / int64(sr)
+	}
+	fi, err := f.Stat()
 	if err != nil {
-		src.Close()
-		return Level{}, err
+		return 0
 	}
-
-	tmp, err := os.CreateTemp(dir, ".normmp3-*.mp3")
-	if err != nil {
-		src.Close()
-		return Level{}, err
-	}
-	tmpName := tmp.Name()
-	cleanup := func() {
-		tmp.Close()
-		os.Remove(tmpName)
-	}
-
-	w := bufio.NewWriterSize(tmp, 256*1024)
-	if _, err := tag.WriteTo(w); err != nil {
-		src.Close()
-		cleanup()
-		return Level{}, err
-	}
-
-	channels := 2
-	if c, cerr := Channels(path); cerr == nil && (c == 1 || c == 2) {
-		channels = c
-	}
-
-	enc := mp3enc.NewEncoder(sr, channels)
-	if err := setBitrate(enc, encodeBitrateKbps); err != nil {
-		src.Close()
-		cleanup()
-		return Level{}, err
-	}
-	perPass := int(enc.Mpeg.GranulesPerFrame) * granuleSize * channels
-	pass := make([]int16, 0, perPass)
-	quant := make([]float64, 0, perPass)
-
-	factor := math.Pow(10, gainDB/20)
-	th := math.Pow(10, limiterCeilDB/20) * ClipSample
-	full := float64(ClipSample)
-
-	total := dec.Length()
-	read := int64(0)
-	maxAmp := 0
-	buf := make([]byte, 64*1024)
-
-	store := func(x float64) {
-		av := int(math.Abs(x))
-		if av > maxAmp {
-			maxAmp = av
-		}
-		if x > ClipSample {
-			x = ClipSample
-		} else if x < -ClipSample-1 {
-			x = -ClipSample - 1
-		}
-		q := int16(math.Round(x))
-		pass = append(pass, q)
-		quant = append(quant, float64(q))
-		if channels == 1 {
-			quant = append(quant, float64(q))
-		}
-		if len(pass) == perPass {
-			an.Add(quant)
-			flushPass(w, enc, pass)
-			pass = pass[:0]
-			quant = quant[:0]
-		}
-	}
-
-	for {
-		n, rerr := dec.Read(buf)
-		if n > 0 {
-			read += int64(n)
-			if channels == 1 {
-				for i := 0; i+3 < n; i += 4 {
-					v := float64(int16(uint16(buf[i]) | uint16(buf[i+1])<<8))
-					x := v * factor
-					if limit {
-						if x > th {
-							x = th + (full-th)*math.Tanh((x-th)/(full-th))
-						} else if x < -th {
-							x = -th - (full-th)*math.Tanh((-x-th)/(full-th))
-						}
-					}
-					store(x)
-				}
-			} else {
-				for i := 0; i+1 < n; i += 2 {
-					v := float64(int16(uint16(buf[i]) | uint16(buf[i+1])<<8))
-					x := v * factor
-					if limit {
-						if x > th {
-							x = th + (full-th)*math.Tanh((x-th)/(full-th))
-						} else if x < -th {
-							x = -th - (full-th)*math.Tanh((-x-th)/(full-th))
-						}
-					}
-					store(x)
-				}
-			}
-			if progress != nil && total > 0 {
-				progress(math.Min(1, float64(read)/float64(total)))
-			}
-		}
-		if rerr == io.EOF {
-			break
-		}
-		if rerr != nil {
-			src.Close()
-			cleanup()
-			return Level{}, rerr
-		}
-	}
-	src.Close()
-
-	if len(pass) > 0 {
-		tail := pass
-		for len(tail) < perPass {
-			tail = append(tail, 0)
-			for k := 0; k < channels; k++ {
-				quant = append(quant, 0)
-			}
-		}
-		an.Add(quant)
-		flushPass(w, enc, tail)
-	}
-
-	if err := w.Flush(); err != nil {
-		cleanup()
-		return Level{}, err
-	}
-	if err := tmp.Close(); err != nil {
-		cleanup()
-		return Level{}, err
-	}
-	if read == 0 {
-		cleanup()
-		return Level{}, ErrNoSamples
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		cleanup()
-		return Level{}, err
-	}
-	return levelFrom(an.Gain(), maxAmp), nil
-}
-
-func flushPass(w io.Writer, enc *mp3enc.Encoder, pass []int16) {
-	out, written := enc.EncodeBufferInterleaved(pass)
-	if written > 0 {
-		w.Write(out[:written])
-	}
-}
-
-var mpeg1Bitrates = [15]int{0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320}
-var mpeg2Bitrates = [15]int{0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160}
-
-func setBitrate(enc *mp3enc.Encoder, kbps int) error {
-	table := &mpeg2Bitrates
-	if enc.Mpeg.Version == 3 {
-		table = &mpeg1Bitrates
-	}
-	idx := -1
-	for i, b := range table {
-		if b == kbps {
-			idx = i
-			break
-		}
-	}
-	if idx < 0 {
-		return fmt.Errorf("audio: unsupported bitrate %d kbps", kbps)
-	}
-	enc.Mpeg.Bitrate = int64(kbps)
-	enc.Mpeg.BitrateIndex = int64(idx)
-
-	avg := (float64(enc.Mpeg.GranulesPerFrame) * granuleSize / float64(enc.Wave.SampleRate)) *
-		(float64(kbps) * 1000 / float64(enc.Mpeg.BitsPerSlot))
-	enc.Mpeg.WholeSlotsPerFrame = int64(avg)
-	enc.Mpeg.FracSlotsPerFrame = avg - float64(enc.Mpeg.WholeSlotsPerFrame)
-	enc.Mpeg.SlotLag = -enc.Mpeg.FracSlotsPerFrame
-	return nil
+	return int64(float64(fi.Size()) * 8 / 128000 * 1e6)
 }

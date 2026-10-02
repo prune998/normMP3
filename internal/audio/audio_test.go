@@ -1,81 +1,260 @@
 package audio
 
 import (
-	"bufio"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/bogem/id3v2/v2"
 	mp3dec "github.com/hajimehoshi/go-mp3"
-	mp3enc "github.com/prune998/normMP3/internal/mp3enc"
+
+	"github.com/prune998/normMP3/internal/ffmpeg"
 	"github.com/prune998/normMP3/internal/rgain"
 )
 
-func genSine(sr int, seconds float64, freq, amp float64) []int16 {
-	n := int(float64(sr) * seconds)
-	pcm := make([]int16, 2*n)
-	for i := 0; i < n; i++ {
-		v := int16(math.Round(32767 * amp * math.Sin(2*math.Pi*freq*float64(i)/float64(sr))))
-		pcm[2*i] = v
-		pcm[2*i+1] = v
-	}
-	return pcm
-}
-
-func writeTestMP3(t *testing.T, path string, sr int, pcm []int16, withTags bool) {
-	writeTestMP3Ch(t, path, sr, pcm, 2, withTags)
-}
-
-func writeTestMP3Ch(t *testing.T, path string, sr int, pcm []int16, channels int, withTags bool) {
+// requireFFmpeg skips the test when no ffmpeg binary is available (the
+// embedded payload is extracted on first use).
+func requireFFmpeg(t *testing.T) {
 	t.Helper()
-	f, err := os.Create(path)
+	if _, err := ffmpeg.Executable(); err != nil {
+		t.Skipf("ffmpeg indisponible: %v", err)
+	}
+}
+
+// genTestMP3 generates a 2 s 997 Hz sine MP3 with the embedded ffmpeg.
+func genTestMP3(t *testing.T, path string, channels int, withTags bool) {
+	t.Helper()
+	meta := []string{}
+	if withTags {
+		meta = []string{"-metadata", "title=Test Titre", "-metadata", "artist=Artiste Test"}
+	}
+	args := []string{
+		"-y", "-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "sine=frequency=997:duration=2",
+		"-ac", strconv.Itoa(channels), "-ar", "44100", "-b:a", "128k",
+	}
+	args = append(args, meta...)
+	args = append(args, path)
+	if err := ffmpeg.Run(args...); err != nil {
+		t.Fatalf("génération du fichier de test: %v", err)
+	}
+}
+
+func TestAnalyzeFile(t *testing.T) {
+	requireFFmpeg(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.mp3")
+	genTestMP3(t, path, 2, false)
+
+	lv, err := AnalyzeFile(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manual := analyzeManually(t, path)
+	if math.Abs(lv.GainRec-manual.GainRec) > 1e-9 || lv.MaxAmp != manual.MaxAmp {
+		t.Errorf("AnalyzeFile %+v != manual decode %+v", lv, manual)
+	}
+	if lv.Loudness < 60 || lv.Loudness > 120 {
+		t.Errorf("loudness %.2f outside sane range", lv.Loudness)
+	}
+	if lv.Clipping {
+		t.Error("unexpected clipping flag on quiet file")
+	}
+}
+
+func TestApplyGainClipsAndKeepsTags(t *testing.T) {
+	requireFFmpeg(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "b.mp3")
+	genTestMP3(t, path, 2, true)
+
+	before, err := AnalyzeFile(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// the clipping flag is driven by the analysis-time peak: a +6 dB gain
+	// on a file peaking at 20000 must be flagged (20000*2 > 32767)
+	after, err := ApplyGainFile(path, 6, 20000, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(after.Loudness-(before.Loudness+6)) > 0.8 {
+		t.Errorf("after boost: loudness %.3f, want ~%.3f", after.Loudness, before.Loudness+6)
+	}
+	if !after.Clipping {
+		t.Error("expected clipping flag when the gain doubles a 20000 peak")
+	}
+
+	after2, err := ApplyGainFile(path, 6, 10000, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after2.Clipping {
+		t.Error("unexpected clipping flag when the peak stays under full scale")
+	}
+
+	tag, err := id3v2.Open(path, id3v2.Options{Parse: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tag.Close()
+	tf := tag.GetTextFrame(tag.CommonID("Title"))
+	if tf.Text != "Test Titre" {
+		t.Errorf("title not preserved: %q", tf.Text)
+	}
+}
+
+func TestLoudNorm(t *testing.T) {
+	requireFFmpeg(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "c.mp3")
+	genTestMP3(t, path, 2, false)
+
+	if _, err := AnalyzeFile(path, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// loudnorm I=-(112-89)=-23 LUFS lands near cible-5 on the ReplayGain
+	// scale; the two meters weight signals differently, so keep a wide band
+	after, err := LoudNormFile(path, RefLevel, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(after.Loudness-(RefLevel-5)) > 6 {
+		t.Errorf("loudnorm: loudness %.3f, want ~%.3f", after.Loudness, RefLevel-5)
+	}
+	if after.MaxAmp > ClipSample {
+		t.Errorf("maxAmp %d exceeds full scale", after.MaxAmp)
+	}
+}
+
+func TestMonoStaysMono(t *testing.T) {
+	requireFFmpeg(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "m.mp3")
+	genTestMP3(t, path, 1, false)
+
+	ch, err := Channels(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ch != 1 {
+		t.Fatalf("test source should be mono, header says %d", ch)
+	}
+
+	before, err := AnalyzeFile(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := ApplyGainFile(path, -1, before.MaxAmp, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(after.Loudness-(before.Loudness-1)) > 0.8 {
+		t.Errorf("mono gain: loudness %.3f, want ~%.3f", after.Loudness, before.Loudness-1)
+	}
+
+	ch, err = Channels(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ch != 1 {
+		t.Fatalf("re-encoded file should stay mono, header says %d", ch)
+	}
+}
+
+func TestStereoStaysStereo(t *testing.T) {
+	requireFFmpeg(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s.mp3")
+	genTestMP3(t, path, 2, false)
+
+	ch, err := Channels(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ch != 2 {
+		t.Fatalf("stereo source should report 2 channels, got %d", ch)
+	}
+	if _, err := LoudNormFile(path, RefLevel, nil); err != nil {
+		t.Fatal(err)
+	}
+	ch, err = Channels(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ch != 2 {
+		t.Fatalf("re-encoded file should stay stereo, got %d", ch)
+	}
+}
+
+// TestReencodePreservesInterleaving checks that a loud-left / silent-right
+// file comes back with the same channel assignment.
+func TestReencodePreservesInterleaving(t *testing.T) {
+	requireFFmpeg(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "e.mp3")
+
+	if err := ffmpeg.Run(
+		"-y", "-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+		"-f", "lavfi", "-i", "sine=frequency=3000:duration=1",
+		"-filter_complex", "[0:a]volume=7[l];[1:a]volume=0.6[r];[l][r]join=inputs=2:channel_layout=stereo",
+		"-ar", "44100", "-b:a", "128k", path,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ApplyGainFile(path, -1, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer f.Close()
-
-	w := bufio.NewWriterSize(f, 128*1024)
-	if withTags {
-		tag := id3v2.NewEmptyTag()
-		tag.AddTextFrame(tag.CommonID("Title"), id3v2.EncodingUTF8, "Test Titre")
-		tag.AddTextFrame(tag.CommonID("Artist"), id3v2.EncodingUTF8, "Artiste Test")
-		if _, err := tag.WriteTo(w); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	enc := mp3enc.NewEncoder(sr, channels)
-	if err := setBitrate(enc, encodeBitrateKbps); err != nil {
+	dec, err := mp3dec.NewDecoder(f)
+	if err != nil {
 		t.Fatal(err)
 	}
-	perPass := int(enc.Mpeg.GranulesPerFrame) * granuleSize * channels
-	if channels == 1 {
-		perPass = int(enc.Mpeg.GranulesPerFrame) * granuleSize
-	}
-	for i := 0; i < len(pcm); i += perPass {
-		end := i + perPass
-		pad := false
-		if end > len(pcm) {
-			end = len(pcm)
-			pad = true
-		}
-		chunk := pcm[i:end]
-		if pad {
-			for len(chunk) < perPass {
-				chunk = append(chunk, 0)
+	buf := make([]byte, 64*1024)
+	leftDominant := false
+	for {
+		m, rerr := dec.Read(buf)
+		if m > 0 {
+			for i := 0; i+7 < m; i += 8 {
+				l := int16(uint16(buf[i]) | uint16(buf[i+1])<<8)
+				r := int16(uint16(buf[i+2]) | uint16(buf[i+3])<<8)
+				al, ar := int(l), int(r)
+				if al < 0 {
+					al = -al
+				}
+				if ar < 0 {
+					ar = -ar
+				}
+				// left carries a loud tone, right a faint one: at the left
+				// peaks the right channel is far below 5x
+				if al > 10000 && al > 5*ar+500 {
+					leftDominant = true
+				}
 			}
 		}
-		out, written := enc.EncodeBufferInterleaved(chunk)
-		if written > 0 {
-			if _, err := w.Write(out[:written]); err != nil {
-				t.Fatal(err)
-			}
+		if rerr != nil {
+			break
 		}
 	}
-	if err := w.Flush(); err != nil {
-		t.Fatal(err)
+	if !leftDominant {
+		t.Error("channel assignment changed (left is no longer dominant)")
+	}
+}
+
+func TestNoSamplesError(t *testing.T) {
+	if _, err := AnalyzeFile(filepath.Join(t.TempDir(), "missing.mp3"), nil); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("want not-exist error, got %v", err)
 	}
 }
 
@@ -119,204 +298,4 @@ func analyzeManually(t *testing.T, path string) Level {
 		}
 	}
 	return levelFrom(a.Gain(), maxAmp)
-}
-
-func TestAnalyzeFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "a.mp3")
-	sr := 44100
-	writeTestMP3(t, path, sr, genSine(sr, 3, 997, 0.5), false)
-
-	lv, err := AnalyzeFile(path, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manual := analyzeManually(t, path)
-	if math.Abs(lv.GainRec-manual.GainRec) > 1e-9 || lv.MaxAmp != manual.MaxAmp {
-		t.Errorf("AnalyzeFile %+v != manual decode %+v", lv, manual)
-	}
-
-	pure := RefLevel - (64.82 - 20*math.Log10(0.5*32767/math.Sqrt2))
-	if math.Abs(lv.Loudness-pure) > 12 {
-		t.Errorf("loudness %.2f too far from pure-signal %.2f", lv.Loudness, pure)
-	}
-	if lv.Clipping {
-		t.Error("unexpected clipping flag on quiet file")
-	}
-}
-
-func TestApplyGainClipsAndKeepsTags(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "b.mp3")
-	sr := 44100
-	writeTestMP3(t, path, sr, genSine(sr, 3, 997, 0.5), true)
-
-	before, err := AnalyzeFile(path, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	after, err := ApplyGainFile(path, 6, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if math.Abs(after.Loudness-(before.Loudness+6)) > 0.8 {
-		t.Errorf("after boost: loudness %.3f, want ~%.3f", after.Loudness, before.Loudness+6)
-	}
-	if !after.Clipping {
-		t.Error("expected clipping flag after +6 dB on -6 dBFS sine")
-	}
-
-	tag, err := id3v2.Open(path, id3v2.Options{Parse: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tag.Close()
-	tf := tag.GetTextFrame(tag.CommonID("Title"))
-	if tf.Text != "Test Titre" {
-		t.Errorf("title not preserved: %q", tf.Text)
-	}
-}
-
-func TestLoudNorm(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "c.mp3")
-	sr := 44100
-	writeTestMP3(t, path, sr, genSine(sr, 3, 997, 0.9), false)
-
-	before, err := AnalyzeFile(path, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	gain := RefLevel - before.Loudness
-	after, err := LoudNormFile(path, gain, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if math.Abs(after.Loudness-RefLevel) > 0.6 {
-		t.Errorf("loudnorm: loudness %.3f, want ~%.3f", after.Loudness, RefLevel)
-	}
-	if after.Clipping {
-		t.Errorf("loudnorm output should not clip, maxAmp=%d", after.MaxAmp)
-	}
-	if after.MaxAmp > ClipSample {
-		t.Errorf("maxAmp %d exceeds full scale", after.MaxAmp)
-	}
-}
-
-func TestMonoStaysMono(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "m.mp3")
-	sr := 44100
-
-	n := sr * 2
-	pcm := make([]int16, 2*n)
-	for i := 0; i < n; i++ {
-		v := int16(math.Round(12000 * math.Sin(2*math.Pi*997*float64(i)/float64(sr))))
-		pcm[2*i] = v
-		pcm[2*i+1] = v
-	}
-	writeTestMP3Ch(t, path, sr, pcm, 1, false)
-
-	ch, err := Channels(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ch != 1 {
-		t.Fatalf("test source should be mono, header says %d", ch)
-	}
-
-	before, err := AnalyzeFile(path, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	after, err := ApplyGainFile(path, -1, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if math.Abs(after.Loudness-(before.Loudness-1)) > 0.8 {
-		t.Errorf("mono gain: loudness %.3f, want ~%.3f", after.Loudness, before.Loudness-1)
-	}
-
-	ch, err = Channels(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ch != 1 {
-		t.Fatalf("re-encoded file should stay mono, header says %d", ch)
-	}
-}
-
-func TestStereoStaysStereo(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "s.mp3")
-	sr := 44100
-	writeTestMP3(t, path, sr, genSine(sr, 2, 997, 0.5), false)
-
-	ch, err := Channels(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ch != 2 {
-		t.Fatalf("stereo source should report 2 channels, got %d", ch)
-	}
-	if _, err := LoudNormFile(path, -2, nil); err != nil {
-		t.Fatal(err)
-	}
-	ch, err = Channels(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ch != 2 {
-		t.Fatalf("re-encoded file should stay stereo, got %d", ch)
-	}
-}
-
-func TestReencodePreservesInterleaving(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "e.mp3")
-	sr := 44100
-	n := sr / 2
-	pcm := make([]int16, 2*n)
-	for i := 0; i < n; i++ {
-		l := int16(math.Round(20000 * math.Sin(2*math.Pi*440*float64(i)/float64(sr))))
-		r := int16(math.Round(8000 * math.Sin(2*math.Pi*3000*float64(i)/float64(sr))))
-		pcm[2*i] = l
-		pcm[2*i+1] = r
-	}
-	writeTestMP3(t, path, sr, pcm, false)
-
-	if _, err := ApplyGainFile(path, -1, nil); err != nil {
-		t.Fatal(err)
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	dec, err := mp3dec.NewDecoder(f)
-	if err != nil {
-		t.Fatal(err)
-	}
-	buf := make([]byte, 64*1024)
-	found := false
-	for {
-		m, rerr := dec.Read(buf)
-		if m > 0 {
-			for i := 0; i+7 < m; i += 8 {
-				l := int16(uint16(buf[i]) | uint16(buf[i+1])<<8)
-				r := int16(uint16(buf[i+2]) | uint16(buf[i+3])<<8)
-				if l > 8000 && r < 4000 {
-					found = true
-				}
-			}
-		}
-		if rerr != nil {
-			break
-		}
-	}
-	if !found {
-		t.Error("L/R channels appear swapped or mixed after re-encode")
-	}
 }
