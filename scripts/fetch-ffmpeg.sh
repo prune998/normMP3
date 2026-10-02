@@ -94,7 +94,11 @@ case "$want" in
   linux)   fetch_linux amd64; fetch_linux arm64 ;;
   windows) fetch_windows ;;
   darwin)  fetch_darwin ;;
-  all)     fetch_linux amd64; fetch_linux arm64; fetch_windows; fetch_darwin ;;
+  all)
+    fetch_linux amd64; fetch_linux arm64; fetch_windows
+    # lipo n'existe que sur macOS
+    if [ "$(uname)" = "Darwin" ]; then fetch_darwin; fi
+    ;;
 esac
 
 echo "terminé : $(ls "$BIN" | tr '\n' ' ')"
