@@ -3,9 +3,25 @@ Installation — macOS
 
 1. Décompressez l'archive (double-clic).
 2. Glissez NormMP3.app dans le dossier Applications.
-3. Premier lancement : clic droit sur NormMP3.app ▸ Ouvrir
-   (l'application n'est pas distribuée via l'App Store ; acceptez
-   « Ouvrir » si macOS la signale).
+3. Premier lancement : l'application n'est pas distribuée via l'App
+   Store, macOS peut refuser de l'ouvrir (« ne pas vérifier le
+   développeur » ou « est endommagé »). Voir « Déquarantaine »
+   ci-dessous.
+
+Déquarantaine (premier lancement bloqué)
+----------------------------------------
+Méthode graphique :
+
+  - Clic droit sur NormMP3.app ▸ Ouvrir ▸ bouton « Ouvrir » ;
+  - ou Réglages Système ▸ Confidentialité et sécurité ▸ section
+    Sécurité : « NormMP3 a été bloqué… » ▸ « Ouvrir quand même ».
+
+Méthode terminale (fonctionne toujours) :
+
+  xattr -dr com.apple.quarantine /Applications/NormMP3.app
+
+Cette opération n'est nécessaire qu'une seule fois, après le
+téléchargement de l'archive.
 
 Fichiers de travail
 -------------------

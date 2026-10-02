@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -56,10 +57,92 @@ var S = struct {
 }
 
 var brw = struct {
-	cwd string
-	sel map[string]bool
+	cwd    string
+	sel    map[string]bool
+	anchor string
 }{
 	sel: map[string]bool{},
+}
+
+// browserEntries lists the current directory the way the browser modal
+// displays it: directories first, then files, each group sorted by name,
+// hidden entries skipped.
+func browserEntries() []os.DirEntry {
+	entries, err := os.ReadDir(brw.cwd)
+	if err != nil {
+		return nil
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		di, dj := entries[i].IsDir(), entries[j].IsDir()
+		if di != dj {
+			return di
+		}
+		return entries[i].Name() < entries[j].Name()
+	})
+	var out []os.DirEntry
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), ".") {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// browserFiles returns the MP3 files of the current listing, in display
+// order, as absolute paths.
+func browserFiles() []string {
+	var out []string
+	for _, e := range browserEntries() {
+		if e.IsDir() {
+			continue
+		}
+		n := e.Name()
+		if strings.HasSuffix(n, ".mp3") || strings.HasSuffix(n, ".MP3") {
+			out = append(out, filepath.Join(brw.cwd, n))
+		}
+	}
+	return out
+}
+
+// selectRange marks every file between the anchor and clicked (both
+// inclusive, in display order) as selected and returns how many files the
+// range covers. It returns 0 (and selects the clicked file) when the anchor
+// is unset or outside the current listing. The anchor is left untouched so
+// several ranges can extend from the same start.
+func selectRange(clicked string) int {
+	paths := browserFiles()
+	ai := slices.Index(paths, brw.anchor)
+	ci := slices.Index(paths, clicked)
+	if ai < 0 || ci < 0 {
+		brw.sel[clicked] = true
+		brw.anchor = clicked
+		return 0
+	}
+	lo, hi := ai, ci
+	if lo > hi {
+		lo, hi = hi, lo
+	}
+	for i := lo; i <= hi; i++ {
+		brw.sel[paths[i]] = true
+	}
+	return hi - lo + 1
+}
+
+// browserClick applies the click selection semantics on a file:
+// plain click and cmd/ctrl-click toggle the file and move the anchor,
+// shift-click selects the whole range between the anchor and the file
+// (the anchor stays put, so several ranges can extend from it).
+func browserClick(full string) {
+	switch {
+	case GetInputState().Modifiers&ModShift != 0:
+		selectRange(full)
+	case GetInputState().Modifiers&PrimaryMod() != 0:
+		brw.sel[full] = !brw.sel[full]
+		brw.anchor = full
+	default:
+		brw.sel[full] = !brw.sel[full]
+		brw.anchor = full
+	}
 }
 
 func Run(version string) {
@@ -422,19 +505,14 @@ func renderBrowser() {
 				}
 				Label(truncateMiddle(brw.cwd, 52), FontSize(12.5), TextColor(210, 15, 35, 1))
 			})
+			Label("Clic : cocher — Maj+clic : plage — Cmd/Ctrl+clic : basculer",
+				FontSize(12), TextColor(210, 10, 40, 1))
 			Container(Attrs(Grow(1), Expand, Clip, FixHeight(380), Background(0, 0, 100, 1), Corners(6), BorderWidth(1)), func() {
 				ScrollOnInput()
-				entries, err := os.ReadDir(brw.cwd)
-				if err != nil {
-					Label("dossier illisible: "+err.Error(), TextColor(0, 70, 45, 1))
+				entries := browserEntries()
+				if entries == nil {
+					Label("dossier illisible: "+brw.cwd, TextColor(0, 70, 45, 1))
 				}
-				sort.Slice(entries, func(i, j int) bool {
-					di, dj := entries[i].IsDir(), entries[j].IsDir()
-					if di != dj {
-						return di
-					}
-					return entries[i].Name() < entries[j].Name()
-				})
 				for _, e := range entries {
 					name := e.Name()
 					if strings.HasPrefix(name, ".") {
@@ -462,7 +540,7 @@ func renderBrowser() {
 							ModAttrs(Background(200, 45, 92, 1))
 						}
 						if IsClicked() {
-							brw.sel[full] = !brw.sel[full]
+							browserClick(full)
 						}
 						mark := "[  ]"
 						c := Vec4{0, 0, 30, 1}
