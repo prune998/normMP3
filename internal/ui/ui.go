@@ -48,9 +48,11 @@ var S = struct {
 	status   string
 	progress float32
 	modal    string
+	mKind    string
 	mTitle   string
 	mMsg     string
 	gainBuf  float32
+	dark     bool
 }{
 	target: 89.0,
 	modal:  "",
@@ -64,9 +66,675 @@ var brw = struct {
 	sel: map[string]bool{},
 }
 
-// browserEntries lists the current directory the way the browser modal
-// displays it: directories first, then files, each group sorted by name,
-// hidden entries skipped.
+func Run(version string) {
+	S.version = version
+	S.cwd = workDir()
+	S.outDir = filepath.Join(S.cwd, "Fichiers_normalises")
+	loadMemo()
+	loadConf()
+	SetDarkMode(S.dark)
+	brw.cwd = S.cwd
+
+	app.SetupWindow("NormMP3 — Normalisation de fichiers MP3", 1280, 720)
+	app.Run(RootView)
+}
+
+func RootView() {
+	Container(Attrs(Viewport, UseSurface(SurfaceCanvas)), func() {
+		topBar()
+		Container(Attrs(Row, Grow(1), Expand, Gap(10), Pad2(10, 12), Clip), func() {
+			tablePanel()
+			selectionPanel()
+		})
+		bottomBar()
+	})
+	renderModals()
+}
+
+// ------------------------------------------------------------ status helpers
+
+func hasResults() bool {
+	for _, r := range S.rows {
+		if r.target != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func rowState(r *row) string {
+	switch {
+	case r.action == "Aucune correction":
+		return "ok"
+	case r.action == "Ampl.simple" && r.fixed:
+		return "fixed"
+	case r.action == "Ampl.simple":
+		return "boost"
+	case r.action == "Normalisation":
+		return "norm"
+	case r.target != 0:
+		return "ready"
+	default:
+		return "pending"
+	}
+}
+
+// statusColors returns pill background/text pairs that read well on both
+// light and dark surfaces: translucent background, saturated text.
+var statusColors = map[string][2]Vec4{
+	"ok":      {Vec4{130, 55, 40, 0.18}, Vec4{130, 55, 30, 1}},
+	"boost":   {Vec4{210, 60, 45, 0.16}, Vec4{210, 60, 42, 1}},
+	"norm":    {Vec4{5, 65, 50, 0.16}, Vec4{5, 65, 52, 1}},
+	"fixed":   {Vec4{130, 55, 40, 0.18}, Vec4{130, 55, 30, 1}},
+	"ready":   {Vec4{40, 70, 50, 0.14}, Vec4{40, 75, 38, 1}},
+	"pending": {Vec4{0, 0, 50, 0.12}, Vec4{0, 0, 45, 1}},
+	"clip":    {Vec4{5, 70, 50, 0.22}, Vec4{5, 70, 48, 1}},
+}
+
+func pill(label, kind string) {
+	c := statusColors[kind]
+	Container(Attrs(Row, CrossMid, MainAlign(AlignMiddle), Pad2(3, 10), Corners(99), BackgroundVec(c[0])), func() {
+		Label(label, FontSize(11.5), FontWeight(WeightBold), TextColorVec(c[1]))
+	})
+}
+
+// ------------------------------------------------------------------- top bar
+
+func topBar() {
+	Container(Attrs(Row, CrossMid, Pad2(10, 14), Gap(10), Expand, UseSurface(SurfaceToolbar)), func() {
+		Container(Attrs(Row, CrossMid, Gap(8)), func() {
+			Container(Attrs(FixSize(34, 34), CrossMid, MainAlign(AlignMiddle), Corners(8), Background(210, 60, 45, 1)), func() {
+				Icon(SymVolHigh, TextColor(0, 0, 100, 1), FontSize(18))
+			})
+			Container(Attrs(Gap(1)), func() {
+				Label("NormMP3", FontSize(15), FontWeight(WeightBold))
+				Label("Normalisation de fichiers MP3", FontSize(11), TextColorVec(mutedToolbarText()))
+			})
+		})
+
+		Filler(1)
+
+		NextButtonAttrs(ButtonAttrs{Disabled: S.busy})
+		if Button(SymFolder, "Choisir les fichiers") {
+			openBrowser()
+		}
+		NextButtonAttrs(ButtonAttrs{Disabled: S.busy || !hasResults()})
+		if Button(SymChartBar, "Analyse") {
+			startAnalyse()
+		}
+		NextButtonAttrs(ButtonAttrs{Type: ButtonPrimary, Disabled: S.busy || !hasResults()})
+		if Button(SymITick, "Traitement") {
+			startTraitement()
+		}
+
+		Container(Attrs(Row, CrossMid, Gap(6), Pad2(5, 10), Corners(99),
+			BackgroundVec(CurrentColorScheme.Surfaces.Canvas.Background), BorderWidth(1),
+			BorderColorVec(CurrentColorScheme.Surfaces.Canvas.Border)), func() {
+			if IsClicked() {
+				openGainModal()
+			}
+			if IsHovered() {
+				ModAttrs(Background(210, 40, 50, 0.08))
+			}
+			Icon(SymCog, FontSize(13), TextColorVec(CurrentColorScheme.Surfaces.Canvas.Text))
+			Label("Cible", FontSize(12), TextColorVec(CurrentColorScheme.Surfaces.Canvas.Text))
+			Label(fmt.Sprintf("%.1f dB", S.target), FontSize(12.5), FontWeight(WeightBold), TextColorVec(CurrentColorScheme.Surfaces.Canvas.Text))
+		})
+
+		NextButtonAttrs(ButtonAttrs{})
+		if S.dark {
+			if CtrlButton(SymShow, "Sombre", true) {
+				setDark(false)
+			}
+		} else {
+			if CtrlButton(SymHide, "Clair", true) {
+				setDark(true)
+			}
+		}
+	})
+}
+
+func setDark(dark bool) {
+	S.dark = dark
+	SetDarkMode(dark)
+	saveConf()
+}
+
+// ------------------------------------------------------------- main panels
+
+func cardHeader(title, sub string) ContainerId {
+	return Container(Attrs(Row, CrossMid, Pad2(10, 12), Gap(8),
+		UseSurface(SurfacePanel), Background(0, 0, 50, 0.04)), func() {
+		Label(title, FontSize(13), FontWeight(WeightBold))
+		if sub != "" {
+			Label(sub, FontSize(11.5), TextColorVec(mutedText()))
+		}
+	})
+}
+
+func mutedText() Vec4 {
+	c := CurrentColorScheme.Surfaces.Panel.Text
+	return Vec4{c[0], c[1], c[2], c[3] * 0.62}
+}
+
+func mutedToolbarText() Vec4 {
+	c := CurrentColorScheme.Surfaces.Toolbar.Text
+	return Vec4{c[0], c[1], c[2], c[3] * 0.62}
+}
+
+func tablePanel() {
+	Container(Attrs(Grow(1), Expand, Clip, Corners(10), UseSurface(SurfacePanel), BorderWidth(1)), func() {
+		sub := ""
+		switch {
+		case S.busy && S.busyKnd == "analyse":
+			sub = "analyse en cours…"
+		case S.busy:
+			sub = "traitement en cours…"
+		case len(S.rows) > 0:
+			sub = fmt.Sprintf("%d fichier(s)", len(S.rows))
+		}
+		cardHeader("Analyse et traitement", sub)
+
+		if len(S.rows) == 0 {
+			emptyState()
+			return
+		}
+
+		Container(Attrs(Grow(1), Expand, Clip), func() {
+			ScrollOnInput()
+			tableHeader()
+			for i, r := range S.rows {
+				r := r
+				tableRow(i, r)
+			}
+			ScrollBars()
+		})
+	})
+}
+
+func tableHeader() {
+	Container(Attrs(Row, FixHeight(28), CrossMid, Pad2(0, 12), Background(0, 0, 50, 0.05)), func() {
+		hcol("Fichier", 240, AlignStart)
+		hcol("Niveau", 64, AlignEnd)
+		hcol("Cible", 64, AlignEnd)
+		hcol("Corr.", 64, AlignEnd)
+		hcol("Action", 150, AlignMiddle)
+		hcol("Niveau final", 90, AlignEnd)
+		hcol("Ecr.", 44, AlignMiddle)
+	})
+}
+
+func hcol(label string, w float32, al Alignment) {
+	Container(Attrs(FixWidth(w), CrossMid, MainAlign(al)), func() {
+		Label(label, FontSize(11), FontWeight(WeightBold), TextColorVec(mutedText()))
+	})
+}
+
+func tableRow(i int, r *row) {
+	ContainerWithKey(r.path, Attrs(Row, FixHeight(30), CrossMid, Pad2(0, 12)), func() {
+		if i%2 == 1 {
+			ModAttrs(Background(0, 0, 50, 0.035))
+		}
+		if IsHovered() {
+			ModAttrs(Background(210, 50, 50, 0.07))
+		}
+		cellText(r.name, 240, AlignStart, FontSize(12.5))
+		cellText(fmt.Sprintf("%.2f", r.level), 64, AlignEnd, FontSize(12.5))
+		cellText(fmt.Sprintf("%.2f", r.target), 64, AlignEnd, FontSize(12.5))
+		cellText(fmt.Sprintf("%+.2f", r.corr), 64, AlignEnd, FontSize(12.5), corrColor(r))
+		Container(Attrs(FixWidth(150), CrossMid, MainAlign(AlignMiddle)), func() {
+			switch rowState(r) {
+			case "pending", "ready":
+				pill("En attente", "pending")
+			default:
+				pill(r.action, rowState(r))
+			}
+		})
+		if r.done {
+			cellText(fmt.Sprintf("%.2f", r.level2), 90, AlignEnd, FontSize(12.5))
+			Container(Attrs(FixWidth(44), CrossMid, MainAlign(AlignMiddle)), func() {
+				if r.clip2 {
+					pill("Y", "clip")
+				} else {
+					pill("—", "pending")
+				}
+			})
+		} else {
+			cellText("", 90, AlignEnd)
+			Container(Attrs(FixWidth(44)), func() {})
+		}
+	})
+}
+
+func corrColor(r *row) TextStyleFn {
+	if r.target == 0 {
+		return TextColorVec(mutedText())
+	}
+	if r.corr > 0.05 {
+		return TextColor(130, 55, 32, 1)
+	}
+	if r.corr < -0.05 {
+		return TextColor(5, 65, 50, 1)
+	}
+	return TextColorVec(mutedText())
+}
+
+func cellText(text string, w float32, al Alignment, mods ...TextStyleFn) {
+	Container(Attrs(FixWidth(w), CrossMid, MainAlign(al)), func() {
+		Label(text, mods...)
+	})
+}
+
+func emptyState() {
+	Container(Attrs(Grow(1), Expand, CrossMid, MainAlign(AlignMiddle), Gap(10)), func() {
+		Container(Attrs(FixSize(64, 64), CrossMid, MainAlign(AlignMiddle), Corners(16),
+			Background(210, 55, 45, 0.12)), func() {
+			Icon(SymAudio, FontSize(30), TextColor(210, 55, 42, 1))
+		})
+		Label("Aucun fichier sélectionné", FontSize(15), FontWeight(WeightBold))
+		Label("Choisissez des fichiers MP3 : ils seront copiés dans", FontSize(12.5), TextColorVec(mutedText()))
+		Label("Fichiers_normalises et normalisés au gain cible.", FontSize(12.5), TextColorVec(mutedText()))
+		Container(Attrs(FixHeight(6)), func() {})
+		NextButtonType(ButtonPrimary)
+		if Button(SymFolder, "Choisir les fichiers") {
+			openBrowser()
+		}
+	})
+}
+
+func selectionPanel() {
+	Container(Attrs(FixWidth(300), Expand, Clip, Corners(10), UseSurface(SurfacePanel), BorderWidth(1)), func() {
+		done := 0
+		for _, r := range S.rows {
+			if r.done {
+				done++
+			}
+		}
+		sub := ""
+		if len(S.rows) > 0 {
+			sub = fmt.Sprintf("%d / %d traité(s)", done, len(S.rows))
+		}
+		cardHeader("Sélection", sub)
+
+		if len(S.rows) == 0 {
+			Container(Attrs(Grow(1), Expand, CrossMid, MainAlign(AlignMiddle)), func() {
+				Label("La liste des fichiers", FontSize(12), TextColorVec(mutedText()))
+				Label("s'affichera ici.", FontSize(12), TextColorVec(mutedText()))
+			})
+			return
+		}
+
+		Container(Attrs(Grow(1), Expand, Clip), func() {
+			ScrollOnInput()
+			for _, r := range S.rows {
+				r := r
+				ContainerWithKey("sel-"+r.path, Attrs(Row, CrossMid, FixHeight(30), Gap(8), Pad2(0, 12)), func() {
+					if IsHovered() {
+						ModAttrs(Background(210, 50, 50, 0.07))
+					}
+					if IsDoubleClicked() {
+						openWithDefault(r.path)
+					}
+					Icon(SymAudio, FontSize(13), TextColorVec(mutedText()))
+					Container(Attrs(Grow(1), Clip), func() {
+						Label(r.name, FontSize(12.5))
+					})
+					switch rowState(r) {
+					case "ok":
+						Icon(SymPass, FontSize(14), TextColor(130, 55, 34, 1))
+					case "fixed":
+						Icon(SymPass, FontSize(14), TextColor(130, 55, 34, 1))
+					case "boost", "norm":
+						Icon(SymWarn, FontSize(14), TextColor(40, 75, 38, 1))
+					}
+				})
+			}
+			ScrollBars()
+		})
+		Container(Attrs(Row, CrossMid, Pad2(8, 12), Gap(6), Background(0, 0, 50, 0.04)), func() {
+			Label("Double clic : écouter un fichier", FontSize(11), TextColorVec(mutedText()))
+		})
+	})
+}
+
+// --------------------------------------------------------------- bottom bar
+
+func bottomBar() {
+	Container(Attrs(Row, CrossMid, FixHeight(44), Pad2(0, 14), Gap(12), Expand, UseSurface(SurfaceToolbar)), func() {
+		switch {
+		case S.busy:
+			Container(Attrs(FixWidth(240), CrossMid), func() {
+				ProgressBar(S.progress)
+			})
+			Label(fmt.Sprintf("%d%%", int(S.progress*100+0.5)), FontSize(12), FontWeight(WeightBold))
+			BusyDots(FontSize(14))
+			Container(Attrs(Grow(1), Clip), func() {
+				Label(S.status, FontSize(12.5))
+			})
+		case len(S.rows) > 0:
+			n := len(S.rows)
+			done := 0
+			for _, r := range S.rows {
+				if r.done {
+					done++
+				}
+			}
+			if done == n {
+				Label(fmt.Sprintf("Terminé — %d fichier(s) normalisé(s) dans %s", n, filepath.Base(S.outDir)),
+					FontSize(12.5), TextColor(130, 55, 32, 1))
+			} else {
+				Label(fmt.Sprintf("%d fichier(s) prêt(s) — gain cible %.1f dB", n, S.target),
+					FontSize(12.5))
+			}
+		default:
+			Label("Prêt", FontSize(12.5))
+		}
+		Filler(1)
+		Label("v"+S.version, FontSize(11), TextColorVec(mutedText()))
+	})
+}
+
+// ------------------------------------------------------------------- modals
+
+func renderModals() {
+	switch S.modal {
+	case "msg":
+		style := ModalStyleForScheme(CurrentColorScheme)
+		ModalStyled(520, closeModal, style, func() {
+			kindIcon := SymInfo
+			kindColor := Vec4{210, 60, 45, 1}
+			switch S.mKind {
+			case "error":
+				kindIcon = SymFail
+				kindColor = Vec4{5, 65, 50, 1}
+			case "warn":
+				kindIcon = SymWarn
+				kindColor = Vec4{40, 75, 38, 1}
+			}
+			Container(Attrs(Pad(20), Gap(12)), func() {
+				Container(Attrs(Row, CrossMid, Gap(10)), func() {
+					Container(Attrs(FixSize(34, 34), CrossMid, MainAlign(AlignMiddle), Corners(8),
+						BackgroundVec(Vec4{kindColor[0], kindColor[1], kindColor[2], 0.14})), func() {
+						Icon(kindIcon, FontSize(17), TextColorVec(kindColor))
+					})
+					Label(S.mTitle, FontSize(15.5), FontWeight(WeightBold))
+				})
+				Container(Attrs(Pad2(2, 0), Gap(4)), func() {
+					for _, line := range strings.Split(S.mMsg, "\n") {
+						Label(line, FontSize(13))
+					}
+				})
+				Container(Attrs(Row, MainAlign(AlignEnd), Pad2(8, 0)), func() {
+					NextButtonType(ButtonPrimary)
+					if Button(NoIcon, "OK") {
+						closeModal()
+					}
+				})
+			})
+		})
+	case "gain":
+		style := ModalStyleForScheme(CurrentColorScheme)
+		ModalStyled(440, closeModal, style, func() {
+			Container(Attrs(Pad(20), Gap(14)), func() {
+				Label("Choisissez le gain cible", FontSize(15.5), FontWeight(WeightBold))
+				Container(Attrs(Row, CrossMid, MainAlign(AlignMiddle), Gap(10)), func() {
+					Label(fmt.Sprintf("%.1f", S.gainBuf), FontSize(34), FontWeight(WeightBold))
+					Label("dB", FontSize(13), TextColorVec(mutedText()))
+				})
+				Slider(&S.gainBuf, SliderAttrs{Min: 85, Max: 93, Step: 0.5, Width: 360})
+				Container(Attrs(Row, MainAlign(AlignMiddle)), func() {
+					Container(Attrs(FixWidth(360), Row, MainAlign(AlignEnd), Gap(6)), func() {
+						Label("85", FontSize(10.5), TextColorVec(mutedText()))
+						Filler(1)
+						Label("93", FontSize(10.5), TextColorVec(mutedText()))
+					})
+				})
+				Container(Attrs(Row, Gap(10), MainAlign(AlignEnd), Pad2(8, 0)), func() {
+					if Button(NoIcon, "Sortie sans valider") {
+						closeModal()
+					}
+					NextButtonType(ButtonPrimary)
+					if Button(SymITick, "Valider") {
+						validerGain(float64(S.gainBuf))
+					}
+				})
+			})
+		})
+	case "browser":
+		renderBrowser()
+	case "quit":
+		style := ModalStyleForScheme(CurrentColorScheme)
+		ModalStyled(560, closeModal, style, func() {
+			Container(Attrs(Pad(20), Gap(12)), func() {
+				Container(Attrs(Row, CrossMid, Gap(10)), func() {
+					Container(Attrs(FixSize(34, 34), CrossMid, MainAlign(AlignMiddle), Corners(8),
+						Background(5, 65, 50, 0.14)), func() {
+						Icon(SymWarn, FontSize(17), TextColor(5, 65, 50, 1))
+					})
+					Label("ARRÊT PRÉMATURÉ ...", FontSize(15.5), FontWeight(WeightBold))
+				})
+				Label("Le traitement est en cours d'exécution.", FontSize(13))
+				Label("Certains fichiers pourraient être corrompus si vous arrêtez maintenant.", FontSize(13))
+				Label("Voulez-vous vraiment arrêter ?", FontSize(13))
+				Container(Attrs(Row, Gap(10), MainAlign(AlignEnd), Pad2(8, 0)), func() {
+					if Button(NoIcon, "Non, continuer le traitement") {
+						closeModal()
+					}
+					NextButtonAttrs(ButtonAttrs{Type: ButtonDestructive})
+					if Button(NoIcon, "Oui, arrêter") {
+						app.Quit()
+					}
+				})
+			})
+		})
+	}
+}
+
+func renderBrowser() {
+	style := ModalStyleForScheme(CurrentColorScheme)
+	ModalStyled(660, closeModal, style, func() {
+		Container(Attrs(Pad(16), Gap(10)), func() {
+			Label("SELECTIONNER UN OU PLUSIEURS FICHIERS MP3", FontSize(14.5), FontWeight(WeightBold))
+			Container(Attrs(Row, CrossMid, Gap(8)), func() {
+				NextButtonAttrs(ButtonAttrs{})
+				if CtrlButton(SymArrowLeft, "Parent", true) {
+					brw.cwd = filepath.Dir(brw.cwd)
+				}
+				NextButtonAttrs(ButtonAttrs{})
+				if CtrlButton(SymHome, "Home", true) {
+					brw.cwd = homeDir()
+				}
+				Label(truncateMiddle(brw.cwd, 52), FontSize(12), TextColorVec(mutedText()))
+			})
+			Label("Clic : cocher — Maj+clic : plage — Cmd/Ctrl+clic : basculer",
+				FontSize(11.5), TextColorVec(mutedText()))
+			Container(Attrs(Grow(1), Expand, Clip, FixHeight(360), Corners(8),
+				BackgroundVec(CurrentColorScheme.Surfaces.Canvas.Background), BorderWidth(1),
+				BorderColorVec(CurrentColorScheme.Surfaces.Canvas.Border)), func() {
+				ScrollOnInput()
+				for _, e := range browserEntries() {
+					e := e
+					if e.IsDir() {
+						d := e.Name()
+						ContainerWithKey("d-"+d, Attrs(Row, CrossMid, FixHeight(26), Gap(8), Pad2(0, 10)), func() {
+							if IsHovered() {
+								ModAttrs(Background(210, 50, 50, 0.07))
+							}
+							if IsClicked() {
+								brw.cwd = filepath.Join(brw.cwd, d)
+							}
+							Icon(SymFolder, FontSize(13), TextColor(40, 65, 42, 1))
+							Label(d, FontSize(12.5))
+						})
+						continue
+					}
+					n := e.Name()
+					if !strings.HasSuffix(n, ".mp3") && !strings.HasSuffix(n, ".MP3") {
+						continue
+					}
+					full := filepath.Join(brw.cwd, n)
+					ContainerWithKey("f-"+full, Attrs(Row, CrossMid, FixHeight(26), Gap(8), Pad2(0, 10)), func() {
+						if IsHovered() {
+							ModAttrs(Background(210, 50, 50, 0.07))
+						}
+						if IsClicked() {
+							browserClick(full)
+						}
+						if brw.sel[full] {
+							Icon(SymBoxTick, FontSize(14), TextColor(130, 55, 32, 1))
+							Label(n, FontSize(12.5), TextColor(130, 55, 32, 1))
+						} else {
+							Icon(SymBox, FontSize(14), TextColorVec(mutedText()))
+							Label(n, FontSize(12.5))
+						}
+					})
+				}
+				ScrollBars()
+			})
+			Container(Attrs(Row, CrossMid, Gap(10)), func() {
+				Label(fmt.Sprintf("%d fichier(s) sélectionné(s)", len(brw.sel)), FontSize(12.5), FontWeight(WeightBold))
+				Filler(1)
+				if Button(NoIcon, "Annuler") {
+					closeModal()
+				}
+				NextButtonAttrs(ButtonAttrs{Type: ButtonPrimary, Disabled: len(brw.sel) == 0})
+				if Button(SymITick, "Choisir") {
+					choisirFichiers()
+				}
+			})
+		})
+	})
+}
+
+// ------------------------------------------------------------------- toasts
+
+func toastInfo(msg string) {
+	Toast(SymInfo, "Information", msg)
+}
+
+func toastSuccess(msg string) {
+	Toast(SymPass, "Terminé", msg)
+}
+
+// ------------------------------------------------------------- user actions
+
+func openGainModal() {
+	S.gainBuf = float32(S.target)
+	S.modal = "gain"
+}
+
+func validerGain(v float64) {
+	S.target = v
+	saveMemo()
+	closeModal()
+	toastSuccess(fmt.Sprintf("Gain cible fixé à %.1f dB — relance de l'analyse", v))
+	startAnalyse()
+}
+
+func closeModal() { S.modal = "" }
+
+func showMsg(title, msg string) {
+	S.modal = "msg"
+	S.mKind = "info"
+	S.mTitle = title
+	S.mMsg = msg
+}
+
+func showError(title, msg string) {
+	S.modal = "msg"
+	S.mKind = "error"
+	S.mTitle = title
+	S.mMsg = msg
+}
+
+func loadMemo() {
+	data, err := os.ReadFile(filepath.Join(S.cwd, "memo.txt"))
+	if err == nil {
+		var v float64
+		if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%f", &v); err == nil && v >= 80 && v <= 100 {
+			S.target = v
+		}
+	}
+}
+
+func saveMemo() {
+	os.WriteFile(filepath.Join(S.cwd, "memo.txt"), []byte(fmt.Sprintf("%v", S.target)), 0o644)
+}
+
+func loadConf() {
+	data, err := os.ReadFile(filepath.Join(S.cwd, "normmp3.conf"))
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok {
+			continue
+		}
+		if k == "dark" {
+			S.dark = v == "true"
+		}
+	}
+}
+
+func saveConf() {
+	mode := "false"
+	if S.dark {
+		mode = "true"
+	}
+	content := fmt.Sprintf("dark=%s\n", mode)
+	os.WriteFile(filepath.Join(S.cwd, "normmp3.conf"), []byte(content), 0o644)
+}
+
+func workDir() string {
+	cwd, err := os.Getwd()
+	if err == nil && cwdWritable(cwd) {
+		return cwd
+	}
+	home, herr := os.UserHomeDir()
+	if herr != nil {
+		return cwd
+	}
+	return home
+}
+
+func cwdWritable(dir string) bool {
+	f, err := os.CreateTemp(dir, ".normmp3-write-*")
+	if err != nil {
+		return false
+	}
+	name := f.Name()
+	f.Close()
+	os.Remove(name)
+	return true
+}
+
+func homeDir() string {
+	h, err := os.UserHomeDir()
+	if err != nil {
+		return S.cwd
+	}
+	return h
+}
+
+func listMP3(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		n := e.Name()
+		if e.Type().IsRegular() && (strings.HasSuffix(n, ".mp3") || strings.HasSuffix(n, ".MP3")) {
+			out = append(out, filepath.Join(dir, n))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// --------------------------------------------------------- file browser
+
 func browserEntries() []os.DirEntry {
 	entries, err := os.ReadDir(brw.cwd)
 	if err != nil {
@@ -145,428 +813,9 @@ func browserClick(full string) {
 	}
 }
 
-func Run(version string) {
-	S.version = version
-	S.cwd = workDir()
-	S.outDir = filepath.Join(S.cwd, "Fichiers_normalises")
-	loadMemo()
-	brw.cwd = homeDir()
-
-	app.SetupWindow("APPLICATION : NORMALISATION GAINS FICHIERS MP3", 1280, 720)
-	app.Run(RootView)
-}
-
-func RootView() {
-	Container(Attrs(Viewport, Background(200, 55, 96, 1)), func() {
-		menubar()
-		Container(Attrs(Row, Grow(1), Expand, Gap(8), Pad(8), Clip), func() {
-			tablePanel()
-			selectionPanel()
-		})
-		statusBar()
-	})
-	renderModals()
-}
-
-func menubar() {
-	Container(Attrs(Row, CrossMid, Pad2(4, 6), Gap(6), Background(180, 45, 75, 1)), func() {
-		MenuButton(NoIcon, "Fichiers", func() {
-			if MenuItem(NoIcon, "Choisir les fichiers") {
-				openBrowser()
-			}
-			MenuSeparator()
-			if MenuItem(NoIcon, "Effacer la sélection") {
-				raz()
-			}
-			MenuSeparator()
-			if MenuItem(NoIcon, "Quitter") {
-				quitter()
-			}
-		})
-		MenuButton(NoIcon, "Action", func() {
-			if MenuItem(NoIcon, "Choix du gain cible") {
-				openGainModal()
-			}
-			MenuSeparator()
-			if MenuItem(NoIcon, "Analyse") {
-				startAnalyse()
-			}
-			MenuSeparator()
-			if MenuItem(NoIcon, "Traitement") {
-				startTraitement()
-			}
-		})
-		MenuButton(NoIcon, "A propos ...", func() {
-			if MenuItem(NoIcon, "Infos") {
-				showMsg("A propos de l'application",
-					"Application de normalisation des fichiers MP3\nPortage Go (shirei) de l'application Tkinter originale\nAuteur original : Elie Couzinié\nVersion : "+S.version)
-			}
-			MenuSeparator()
-			if MenuItem(NoIcon, "Lisez-moi ...") {
-				openReadme()
-			}
-		})
-		Filler(1)
-		Label(fmt.Sprintf("Gain cible = %.1f dB", S.target),
-			FontSize(14), TextColor(50, 60, 25, 1))
-	})
-}
-
-func tablePanel() {
-	Container(Attrs(Grow(1), Expand, Clip, Background(0, 0, 100, 1), Corners(6), BorderWidth(1), BorderColor(200, 30, 70, 1)), func() {
-		header := func() {
-			Container(Attrs(Row, FixHeight(26), CrossMid, Background(60, 85, 85, 1)), func() {
-				col("Fichier", 250, AlignStart)
-				col("Niveau", 70, AlignEnd)
-				col("Cible", 70, AlignEnd)
-				col("Corr.", 70, AlignEnd)
-				col("Action", 150, AlignMiddle)
-				col("Niveau final", 90, AlignEnd)
-				col("Ecr.", 40, AlignMiddle)
-			})
-		}
-		if len(S.rows) == 0 {
-			Container(Attrs(Expand, Grow(1), CrossMid, MainAlign(AlignMiddle)), func() {
-				header()
-				Container(Attrs(FixHeight(300), CrossMid, MainAlign(AlignMiddle)), func() {
-					Label("Utilisez Fichiers > Choisir les fichiers pour sélectionner des MP3", FontSize(14), TextColor(210, 15, 45, 1))
-				})
-			})
-			return
-		}
-		Container(Attrs(Grow(1), Expand, Clip), func() {
-			ScrollOnInput()
-			header()
-			for i, r := range S.rows {
-				r := r
-				ContainerWithKey(r.path, Attrs(Row, FixHeight(24), CrossMid), func() {
-					bg := Vec4{0, 0, 100, 1}
-					if i%2 == 1 {
-						bg = Vec4{200, 30, 96, 1}
-					}
-					ModAttrs(BackgroundVec(bg))
-					if IsHovered() {
-						ModAttrs(Background(200, 45, 88, 1))
-					}
-					cell(r.name, 250, AlignStart)
-					cell(fmt.Sprintf("%.2f", r.level), 70, AlignEnd)
-					cell(fmt.Sprintf("%.2f", r.target), 70, AlignEnd)
-					cell(fmt.Sprintf("%+.2f", r.corr), 70, AlignEnd)
-					cell(r.action, 150, AlignMiddle, actionColor(r))
-					if r.done {
-						cell(fmt.Sprintf("%.2f", r.level2), 90, AlignEnd)
-						ecr := " "
-						if r.clip2 {
-							ecr = "Y"
-						}
-						cell(ecr, 40, AlignMiddle, Vec4{0, 70, 45, 1})
-					} else {
-						cell("", 90, AlignEnd)
-						cell("", 40, AlignMiddle)
-					}
-				})
-			}
-			ScrollBars()
-		})
-	})
-}
-
-func col(label string, w float32, al Alignment) {
-	Container(Attrs(FixWidth(w), CrossMid, MainAlign(al), Pad2(0, 6)), func() {
-		Label(label, FontSize(12.5), TextColor(210, 40, 20, 1))
-	})
-}
-
-func cell(text string, w float32, al Alignment, color ...Vec4) {
-	c := Vec4{0, 0, 15, 1}
-	if len(color) == 1 {
-		c = color[0]
-	}
-	Container(Attrs(FixWidth(w), CrossMid, MainAlign(al), Pad2(0, 6)), func() {
-		Label(text, FontSize(12.5), TextColorVec(c))
-	})
-}
-
-func actionColor(r *row) Vec4 {
-	switch {
-	case r.action == "Aucune correction":
-		return Vec4{120, 60, 30, 1}
-	case r.action == "Ampl.simple":
-		return Vec4{210, 70, 35, 1}
-	case r.action == "Normalisation":
-		return Vec4{0, 70, 45, 1}
-	}
-	return Vec4{0, 0, 15, 1}
-}
-
-func selectionPanel() {
-	Container(Attrs(FixWidth(320), Expand, Clip, Background(0, 0, 100, 1), Corners(6), BorderWidth(1), BorderColor(200, 30, 70, 1)), func() {
-		Container(Attrs(FixHeight(26), CrossMid, Pad2(0, 6), Background(60, 85, 85, 1)), func() {
-			Label("Liste des fichiers sélectionnés", FontSize(12.5), TextColor(210, 40, 20, 1))
-		})
-		if len(S.rows) == 0 {
-			return
-		}
-		Container(Attrs(Grow(1), Expand, Clip), func() {
-			ScrollOnInput()
-			for _, r := range S.rows {
-				r := r
-				ContainerWithKey("sel-"+r.path, Attrs(Row, FixHeight(24), CrossMid, Pad2(0, 6)), func() {
-					c := Vec4{0, 0, 15, 1}
-					if r.done {
-						if r.fixed {
-							c = Vec4{120, 60, 30, 1}
-						} else {
-							c = Vec4{0, 70, 45, 1}
-						}
-					}
-					if IsHovered() {
-						ModAttrs(Background(200, 80, 85, 1))
-					}
-					if IsDoubleClicked() {
-						openWithDefault(r.path)
-					}
-					Label(r.name, FontSize(12.5), TextColorVec(c))
-				})
-			}
-			ScrollBars()
-		})
-	})
-}
-
-func statusBar() {
-	Container(Attrs(Row, CrossMid, FixHeight(40), Pad2(6, 8), Gap(12), Background(180, 45, 92, 1)), func() {
-		if S.busy {
-			Container(Attrs(FixWidth(220), CrossMid), func() {
-				ProgressBar(S.progress)
-			})
-			Label(S.status, FontSize(13), TextColor(0, 0, 15, 1))
-		} else if len(S.rows) > 0 {
-			Label(fmt.Sprintf("%d fichier(s) prêt(s) — gain cible %.1f dB", len(S.rows), S.target),
-				FontSize(13), TextColor(210, 15, 35, 1))
-		} else {
-			Label("Prêt", FontSize(13), TextColor(210, 15, 35, 1))
-		}
-	})
-}
-
-func renderModals() {
-	switch S.modal {
-	case "msg":
-		Modal(520, closeModal, func() {
-			Container(Attrs(Pad(18), Gap(14)), func() {
-				Label(S.mTitle, FontSize(16), FontWeight(WeightBold))
-				for _, line := range strings.Split(S.mMsg, "\n") {
-					Label(line, FontSize(13.5))
-				}
-				Container(Attrs(Row, MainAlign(AlignMiddle), Pad2(6, 0)), func() {
-					if Button(NoIcon, "OK") {
-						closeModal()
-					}
-				})
-			})
-		})
-	case "gain":
-		Modal(460, closeModal, func() {
-			Container(Attrs(Pad(18), Gap(14)), func() {
-				Label("Choisissez le gain cible", FontSize(16), FontWeight(WeightBold))
-				Container(Attrs(Row, CrossMid, Gap(12)), func() {
-					Slider(&S.gainBuf, SliderAttrs{Min: 85, Max: 93, Step: 0.5, Width: 280})
-					Label(fmt.Sprintf("%.1f dB", S.gainBuf), FontSize(15), FontWeight(WeightBold))
-				})
-				Container(Attrs(Row, Gap(10), MainAlign(AlignMiddle), Pad2(8, 0)), func() {
-					if Button(NoIcon, "Valider") {
-						validerGain(float64(S.gainBuf))
-					}
-					if Button(NoIcon, "Sortie sans valider") {
-						closeModal()
-					}
-				})
-			})
-		})
-	case "browser":
-		renderBrowser()
-	case "quit":
-		Modal(560, closeModal, func() {
-			Container(Attrs(Pad(18), Gap(14)), func() {
-				Label("ARRÊT PRÉMATURÉ ...", FontSize(16), FontWeight(WeightBold), TextColor(0, 70, 40, 1))
-				Label("Le traitement est en cours d'exécution.", FontSize(13.5))
-				Label("Certains fichiers pourraient être corrompus si vous arrêtez maintenant.", FontSize(13.5))
-				Label("Voulez-vous vraiment arrêter ?", FontSize(13.5))
-				Container(Attrs(Row, Gap(10), MainAlign(AlignMiddle), Pad2(8, 0)), func() {
-					if Button(NoIcon, "Oui, arrêter le traitement") {
-						app.Quit()
-					}
-					if Button(NoIcon, "Non, continuer le traitement") {
-						closeModal()
-					}
-				})
-			})
-		})
-	}
-}
-
-func openGainModal() {
-	S.gainBuf = float32(S.target)
-	S.modal = "gain"
-}
-
-func validerGain(v float64) {
-	S.target = v
-	saveMemo()
-	closeModal()
-	startAnalyse()
-}
-
-func closeModal() { S.modal = "" }
-
-func showMsg(title, msg string) {
-	S.modal = "msg"
-	S.mTitle = title
-	S.mMsg = msg
-}
-
-func loadMemo() {
-	data, err := os.ReadFile(filepath.Join(S.cwd, "memo.txt"))
-	if err == nil {
-		var v float64
-		if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%f", &v); err == nil && v >= 80 && v <= 100 {
-			S.target = v
-		}
-	}
-}
-
-func saveMemo() {
-	os.WriteFile(filepath.Join(S.cwd, "memo.txt"), []byte(fmt.Sprintf("%v", S.target)), 0o644)
-}
-
-func workDir() string {
-	cwd, err := os.Getwd()
-	if err == nil && cwdWritable(cwd) {
-		return cwd
-	}
-	home, herr := os.UserHomeDir()
-	if herr != nil {
-		return cwd
-	}
-	return home
-}
-
-func cwdWritable(dir string) bool {
-	f, err := os.CreateTemp(dir, ".normmp3-write-*")
-	if err != nil {
-		return false
-	}
-	name := f.Name()
-	f.Close()
-	os.Remove(name)
-	return true
-}
-
-func homeDir() string {
-	h, err := os.UserHomeDir()
-	if err != nil {
-		return S.cwd
-	}
-	return h
-}
-
-func listMP3(dir string) []string {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	var out []string
-	for _, e := range entries {
-		n := e.Name()
-		if e.Type().IsRegular() && (strings.HasSuffix(n, ".mp3") || strings.HasSuffix(n, ".MP3")) {
-			out = append(out, filepath.Join(dir, n))
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
 func openBrowser() {
 	brw.sel = map[string]bool{}
 	S.modal = "browser"
-}
-
-func renderBrowser() {
-	Modal(640, closeModal, func() {
-		Container(Attrs(Pad(14), Gap(10)), func() {
-			Label("SELECTIONNER UN OU PLUSIEURS FICHIERS MP3", FontSize(15), FontWeight(WeightBold))
-			Container(Attrs(Row, CrossMid, Gap(8)), func() {
-				if Button(NoIcon, "Dossier parent") {
-					brw.cwd = filepath.Dir(brw.cwd)
-				}
-				if Button(NoIcon, "Home") {
-					brw.cwd = homeDir()
-				}
-				Label(truncateMiddle(brw.cwd, 52), FontSize(12.5), TextColor(210, 15, 35, 1))
-			})
-			Label("Clic : cocher — Maj+clic : plage — Cmd/Ctrl+clic : basculer",
-				FontSize(12), TextColor(210, 10, 40, 1))
-			Container(Attrs(Grow(1), Expand, Clip, FixHeight(380), Background(0, 0, 100, 1), Corners(6), BorderWidth(1)), func() {
-				ScrollOnInput()
-				entries := browserEntries()
-				if entries == nil {
-					Label("dossier illisible: "+brw.cwd, TextColor(0, 70, 45, 1))
-				}
-				for _, e := range entries {
-					name := e.Name()
-					if strings.HasPrefix(name, ".") {
-						continue
-					}
-					if e.IsDir() {
-						d := name
-						ContainerWithKey("d-"+d, Attrs(Row, FixHeight(24), CrossMid, Pad2(0, 8)), func() {
-							if IsHovered() {
-								ModAttrs(Background(200, 45, 92, 1))
-							}
-							if IsClicked() {
-								brw.cwd = filepath.Join(brw.cwd, d)
-							}
-							Label("[dossier] "+d, FontSize(12.5), TextColor(210, 60, 30, 1))
-						})
-						continue
-					}
-					if !strings.HasSuffix(name, ".mp3") && !strings.HasSuffix(name, ".MP3") {
-						continue
-					}
-					full := filepath.Join(brw.cwd, name)
-					ContainerWithKey("f-"+full, Attrs(Row, FixHeight(24), CrossMid, Pad2(0, 8)), func() {
-						if IsHovered() {
-							ModAttrs(Background(200, 45, 92, 1))
-						}
-						if IsClicked() {
-							browserClick(full)
-						}
-						mark := "[  ]"
-						c := Vec4{0, 0, 30, 1}
-						if brw.sel[full] {
-							mark = "[x]"
-							c = Vec4{150, 65, 28, 1}
-						}
-						Label(mark, FontSize(12.5), TextColorVec(c))
-						Label(name, FontSize(12.5), TextColorVec(c))
-					})
-				}
-				ScrollBars()
-			})
-			Container(Attrs(Row, CrossMid, Gap(10)), func() {
-				Label(fmt.Sprintf("%d fichier(s) sélectionné(s)", len(brw.sel)), FontSize(13))
-				Filler(1)
-				if Button(NoIcon, "Annuler") {
-					closeModal()
-				}
-				NextButtonType(ButtonPrimary)
-				if Button(NoIcon, "Choisir") {
-					choisirFichiers()
-				}
-			})
-		})
-	})
 }
 
 func truncateMiddle(s string, n int) string {
@@ -579,11 +828,11 @@ func truncateMiddle(s string, n int) string {
 
 func choisirFichiers() {
 	if S.busy {
-		showMsg("ERREUR", "Un traitement est en cours, patientez.")
+		showError("ERREUR", "Un traitement est en cours, patientez.")
 		return
 	}
 	if len(brw.sel) == 0 {
-		showMsg("ERREUR", "VOUS DEVEZ CHOISIR UN OU PLUSIEURS FICHIERS")
+		showError("ERREUR", "VOUS DEVEZ CHOISIR UN OU PLUSIEURS FICHIERS")
 		return
 	}
 	var picked []string
@@ -594,14 +843,14 @@ func choisirFichiers() {
 
 	for _, p := range picked {
 		if filepath.Dir(p) == S.outDir {
-			showMsg("ERREUR", "VOUS NE POUVEZ PAS SELECTIONNER LE DOSSIER DES FICHIERS DEJA NORMALISES\nVEUILLEZ CHOISIR UN AUTRE DOSSIER OU FAIRE UNE COPIE DE VOS FICHIERS A NORMALISER")
+			showError("ERREUR", "VOUS NE POUVEZ PAS SELECTIONNER LE DOSSIER DES FICHIERS DEJA NORMALISES\nVEUILLEZ CHOISIR UN AUTRE DOSSIER OU FAIRE UNE COPIE DE VOS FICHIERS A NORMALISER")
 			return
 		}
 	}
 	closeModal()
 
 	if err := os.MkdirAll(S.outDir, 0o755); err != nil {
-		showMsg("ERREUR", err.Error())
+		showError("ERREUR", err.Error())
 		return
 	}
 	entries, _ := os.ReadDir(S.outDir)
@@ -613,7 +862,7 @@ func choisirFichiers() {
 	for _, p := range picked {
 		dst := filepath.Join(S.outDir, filepath.Base(p))
 		if err := copyFile(p, dst); err != nil {
-			showMsg("ERREUR", "Copie impossible: "+err.Error())
+			showError("ERREUR", "Copie impossible: "+err.Error())
 			return
 		}
 	}
@@ -650,16 +899,17 @@ func copyFile(src, dst string) error {
 
 func raz() {
 	if S.busy {
-		showMsg("ERREUR", "Vous ne pouvez pas interrompre ce processus")
+		showError("ERREUR", "Vous ne pouvez pas interrompre ce processus")
 		return
 	}
 	if len(S.rows) == 0 {
-		showMsg("ERREUR", "AUCUNE SELECTION A EFFACER")
+		showError("ERREUR", "AUCUNE SELECTION A EFFACER")
 		return
 	}
 	S.rows = nil
 	S.progress = 0
 	S.status = ""
+	toastInfo("Sélection effacée")
 }
 
 func quitter() {
@@ -676,7 +926,7 @@ func openReadme() {
 		openWithDefault(p)
 		return
 	}
-	showMsg("INFORMATION", "Norm_MP3.pdf introuvable dans le dossier de travail")
+	toastInfo("Norm_MP3.pdf introuvable dans le dossier de travail")
 }
 
 func openWithDefault(path string) {
@@ -689,7 +939,9 @@ func openWithDefault(path string) {
 	default:
 		cmd = exec.Command("xdg-open", path)
 	}
-	cmd.Start()
+	if err := cmd.Start(); err != nil {
+		toastInfo("Ouverture impossible: " + err.Error())
+	}
 }
 
 func frameUpdate(fn func()) {
@@ -699,19 +951,21 @@ func frameUpdate(fn func()) {
 	RequestNextFrame()
 }
 
+// ------------------------------------------------------------------ workers
+
 func startAnalyse() {
 	if S.busy {
-		showMsg("ERREUR", "Vous ne pouvez pas interrompre ce processus")
+		showError("ERREUR", "Vous ne pouvez pas interrompre ce processus")
 		return
 	}
 	if len(S.rows) == 0 {
-		showMsg("ERREUR", "AUCUNE SELECTION DE FICHIERS")
+		showError("ERREUR", "AUCUNE SELECTION DE FICHIERS")
 		return
 	}
 
 	files := listMP3(S.outDir)
 	if len(files) == 0 {
-		showMsg("ERREUR", "AUCUNE SELECTION DE FICHIERS")
+		showError("ERREUR", "AUCUNE SELECTION DE FICHIERS")
 		return
 	}
 
@@ -768,7 +1022,7 @@ func startAnalyse() {
 			S.progress = 1
 			S.status = ""
 			if failed != "" {
-				showMsg("ERREUR", "Analyse interrompue:\n"+failed)
+				showError("ERREUR", "Analyse interrompue:\n"+failed)
 			} else {
 				showMsg("INFORMATION", "Analyse terminée, vous pouvez maintenant traiter les fichiers\n\nDurée totale de l'analyse : "+duree)
 			}
@@ -784,21 +1038,11 @@ func fmtDuration(d time.Duration) string {
 
 func startTraitement() {
 	if S.busy {
-		showMsg("ERREUR", "Vous ne pouvez pas interrompre ce processus")
+		showError("ERREUR", "Vous ne pouvez pas interrompre ce processus")
 		return
 	}
-	if len(S.rows) == 0 {
-		showMsg("ERREUR", "AUCUNE SELECTION A TRAITER \n VOUS DEVEZ D'ABORD ANALYSER LES FICHIERS")
-		return
-	}
-	analyzed := true
-	for _, r := range S.rows {
-		if r.target == 0 {
-			analyzed = false
-		}
-	}
-	if !analyzed {
-		showMsg("ERREUR", "AUCUNE SELECTION A TRAITER \n VOUS DEVEZ D'ABORD ANALYSER LES FICHIERS")
+	if len(S.rows) == 0 || !hasResults() {
+		showError("ERREUR", "AUCUNE SELECTION A TRAITER \n VOUS DEVEZ D'ABORD ANALYSER LES FICHIERS")
 		return
 	}
 
@@ -906,7 +1150,7 @@ func startTraitement() {
 			S.progress = 1
 			S.status = ""
 			if failed != "" {
-				showMsg("ERREUR", "Traitement interrompu:\n"+failed)
+				showError("ERREUR", "Traitement interrompu:\n"+failed)
 			} else {
 				showMsg("INFORMATION", "Traitement terminé.\n\nDurée totale du traitement : "+duree+
 					"\n\nVous pouvez utiliser les fichiers maintenant normalisés\nqui se trouvent dans le dossier :\n\n"+strings.ToUpper(S.outDir))
