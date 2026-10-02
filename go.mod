@@ -5,6 +5,7 @@ go 1.27.1
 require (
 	github.com/bogem/id3v2/v2 v2.1.4
 	github.com/hajimehoshi/go-mp3 v0.3.4
+	github.com/ulikunitz/xz v0.5.17
 	go.hasen.dev/shirei v0.8.0
 )
 
