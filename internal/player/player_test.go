@@ -1,61 +1,26 @@
 package player
 
 import (
-	"bufio"
 	"math"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
-	mp3enc "github.com/prune998/normMP3/internal/mp3enc"
 	"go.hasen.dev/shirei/audio"
+
+	"github.com/prune998/normMP3/internal/ffmpeg"
 )
 
-func genSine(sr int, seconds float64, freq, amp float64) []int16 {
-	n := int(float64(sr) * seconds)
-	pcm := make([]int16, 2*n)
-	for i := 0; i < n; i++ {
-		v := int16(math.Round(32767 * amp * math.Sin(2*math.Pi*freq*float64(i)/float64(sr))))
-		pcm[2*i] = v
-		pcm[2*i+1] = v
-	}
-	return pcm
-}
-
-func writeTestMP3(t *testing.T, path string, sr int, pcm []int16) {
+// writeTestMP3 generates a 3 s 997 Hz sine MP3 with the embedded ffmpeg.
+func writeTestMP3(t *testing.T, path string) {
 	t.Helper()
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	w := bufio.NewWriterSize(f, 128*1024)
-
-	enc := mp3enc.NewEncoder(sr, 2)
-	perPass := int(enc.Mpeg.GranulesPerFrame) * 576 * 2
-	for i := 0; i < len(pcm); i += perPass {
-		end := i + perPass
-		pad := false
-		if end > len(pcm) {
-			end = len(pcm)
-			pad = true
-		}
-		chunk := pcm[i:end]
-		if pad {
-			for len(chunk) < perPass {
-				chunk = append(chunk, 0)
-			}
-		}
-		out, written := enc.EncodeBufferInterleaved(chunk)
-		if written > 0 {
-			if _, err := w.Write(out[:written]); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	if err := w.Flush(); err != nil {
-		t.Fatal(err)
+	if err := ffmpeg.Run(
+		"-y", "-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "sine=frequency=997:duration=3",
+		"-filter:a", "volume=0.5", "-ac", "2", "-ar", "44100", "-b:a", "128k",
+		path,
+	); err != nil {
+		t.Skipf("ffmpeg indisponible pour générer le fichier de test: %v", err)
 	}
 }
 
@@ -121,9 +86,12 @@ func TestResamplerUpsample(t *testing.T) {
 }
 
 func TestPlayerLifecycle(t *testing.T) {
+	if _, err := ffmpeg.Executable(); err != nil {
+		t.Skip("ffmpeg indisponible")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "t.mp3")
-	writeTestMP3(t, path, 44100, genSine(44100, 3, 997, 0.5))
+	writeTestMP3(t, path)
 
 	mixer := audio.NewMixer()
 	p := New(mixer)

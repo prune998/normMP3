@@ -32,6 +32,7 @@ type row struct {
 	target float64
 	level  float64
 	corr   float64
+	maxAmp int
 	clip   bool
 	action string
 	level2 float64
@@ -1152,6 +1153,7 @@ func startAnalyse() {
 			}
 			frameUpdate(func() {
 				r.level = lv.Loudness
+				r.maxAmp = lv.MaxAmp
 				r.clip = lv.Clipping
 				r.target = S.target
 				r.corr = S.target - lv.Loudness
@@ -1227,7 +1229,7 @@ func startTraitement() {
 					r.done = true
 				})
 			case mathAbs(corr) <= 5:
-				lv, err = audio.ApplyGainFile(r.path, corr+0.4, progressFnFor(r, &cum, total))
+				lv, err = audio.ApplyGainFile(r.path, corr+0.4, r.maxAmp, progressFnFor(r, &cum, total))
 				if err == nil {
 					clip := lv.Clipping
 					frameUpdate(func() {
@@ -1241,8 +1243,7 @@ func startTraitement() {
 					}
 				}
 			default:
-				gain := (S.target - 5) - r.level
-				lv, err = audio.LoudNormFile(r.path, gain, progressFnFor(r, &cum, total))
+				lv, err = audio.LoudNormFile(r.path, S.target, progressFnFor(r, &cum, total))
 				if err == nil {
 					frameUpdate(func() {
 						r.action = "Normalisation"
@@ -1272,8 +1273,7 @@ func startTraitement() {
 				ftotal += r.size
 			}
 			for _, r := range toFix {
-				gain := (S.target - 5) - r.level2
-				lv, err := audio.LoudNormFile(r.path, gain, func(f float64) {
+				lv, err := audio.LoudNormFile(r.path, S.target, func(f float64) {
 					frameUpdate(func() {
 						S.progress = float32((float64(fcum) + f*float64(r.size)) / float64(ftotal))
 					})

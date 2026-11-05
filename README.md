@@ -154,14 +154,15 @@ NormMP3.
 
 ## Building from source
 
-Requires Go 1.27+ (no C compiler needed, no cgo, no external library):
+Requires Go 1.27+ (no C compiler needed, no cgo) and network access the
+first time to fetch the ffmpeg payloads:
 
 ```sh
 git clone https://github.com/prune998/normMP3.git
 cd normMP3
-make check          # gofmt + go vet + tests
+make check          # gofmt + go vet + tests (fetches ffmpeg blobs on first run)
 make run            # run the app on this machine
-make build          # native binary in build/
+make build          # native binary in build/ (ffmpeg embedded)
 make dist           # all packages for this machine in dist/
 make dist-macos dist-windows dist-linux   # all seven packages
 ```
@@ -175,14 +176,24 @@ Mac for `lipo`, `codesign` and `ditto`), `make dist-windows`,
 | Concern | Implementation |
 |---|---|
 | GUI | [shirei](https://pkg.go.dev/go.hasen.dev/shirei) v0.8.0 — immediate-mode, cross-platform, pure Go (Metal/D3D11/GLES via purego, software fallback) |
-| MP3 decoding | [hajimehoshi/go-mp3](https://pkg.go.dev/github.com/hajimehoshi/go-mp3) (pure Go) |
-| Loudness analysis | ReplayGain 1.0, ported from `gain_analysis.c` (Robinson/Sawyer/Klemm), validated against the compiled C reference |
-| Re-encoding | Shine fixed-point encoder port (vendored in `internal/mp3enc`, LGPL-2.0), 64 kbps — with a local fix for MPEG-1 mono side-info that upstream lacks (mono files encoded by the stock encoder are invalid) |
-| Tags | [bogem/id3v2/v2](https://pkg.go.dev/github.com/bogem/id3v2/v2) — frames carried over on re-encode |
+| Loudness analysis | ReplayGain 1.0, ported from `gain_analysis.c` (Robinson/Sawyer/Klemm) — the same algorithm mp3gain uses, validated against the compiled C reference |
+| Processing & re-encoding | **ffmpeg, embedded in the binary** (static builds fetched by `scripts/fetch-ffmpeg.sh`, xz-compressed, extracted to the user cache on first use), running the original application's exact commands: `volume=<corr+0.4>dB` / `loudnorm=I=-(112-target):TP=-2:LRA=7 -ar 44100 -ab 64k` |
+| Tags | ID3 metadata carried over by ffmpeg's default metadata mapping |
 
-The "loudness normalization" stage approximates ffmpeg's
-`loudnorm=I=-(112-target):TP=-2:LRA=7`: the measured gain is applied and
-a soft-knee limiter holds peaks at -2 dBFS.
+Because processing uses the real ffmpeg, the volume and loudnorm passes
+behave exactly like the original application (same filters, same 44.1 kHz
+/ 64 kbps output).
+
+Binary size: the embedded ffmpeg makes the download noticeably larger
+(≈100 MB per archive). Windows ARM64 has no static ffmpeg build
+available: on that platform the app uses the `ffmpeg` found in PATH, and
+processing fails with a clear message when none is installed.
+
+Building from source requires the ffmpeg payloads to exist (go:embed):
+
+```sh
+scripts/fetch-ffmpeg.sh all    # or: make ffmpeg-bins (done automatically by make build/dist)
+```
 
 ## Credits
 

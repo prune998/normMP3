@@ -168,8 +168,8 @@ Mac non signées, rien de spécifique à NormMP3.
 
 ## Compilation à partir des sources
 
-Nécessite Go 1.27 ou plus (pas de compilateur C, pas de cgo, aucune
-bibliothèque externe) :
+Nécessite Go 1.27 ou plus (pas de compilateur C, pas de cgo) et un accès
+réseau au premier lancement pour récupérer les archives ffmpeg :
 
 ```sh
 git clone https://github.com/prune998/normMP3.git
@@ -191,14 +191,25 @@ machine).
 | Aspect | Mise en œuvre |
 |---|---|
 | Interface | [shirei](https://pkg.go.dev/go.hasen.dev/shirei) v0.8.0 — immediate mode, multiplateforme, Go pur (Metal/D3D11/GLES via purego, rendu logiciel en repli) |
-| Décodage MP3 | [hajimehoshi/go-mp3](https://pkg.go.dev/github.com/hajimehoshi/go-mp3) (Go pur) |
-| Analyse de loudness | ReplayGain 1.0, porté depuis `gain_analysis.c` (Robinson/Sawyer/Klemm), validé contre la référence C compilée |
-| Ré-encodage | Port Go de l'encodeur Shine à virgule fixe (vendu dans `internal/mp3enc`, LGPL-2.0), 64 kbps — avec une correction locale du side-info mono MPEG-1 absente de l'amont (les fichiers mono produits par l'encodeur original sont invalides) |
-| Balises | [bogem/id3v2/v2](https://pkg.go.dev/github.com/bogem/id3v2/v2) — reportées lors du ré-encodage |
+| Analyse de loudness | ReplayGain 1.0, porté depuis `gain_analysis.c` (Robinson/Sawyer/Klemm) — le même algorithme que mp3gain, validé contre la référence C compilée |
+| Traitement et ré-encodage | **ffmpeg embarqué dans le binaire** (builds statiques téléchargés par `scripts/fetch-ffmpeg.sh`, compressés en xz, extraits dans le cache utilisateur au premier lancement), avec les commandes exactes de l'application d'origine : `volume=<corr+0,4>dB` / `loudnorm=I=-(112-cible):TP=-2:LRA=7 -ar 44100 -ab 64k` |
+| Balises | les métadonnées ID3 sont reportées par la gestion par défaut de ffmpeg |
 
-L'étape de « normalisation » approche le `loudnorm=I=-(112-cible):TP=-2:LRA=7`
-de ffmpeg : le gain mesuré est appliqué et un limiteur à coude doux
-maintient les crêtes à -2 dBFS.
+Le traitement utilise le vrai ffmpeg : les passes volume et loudnorm se
+comportent exactement comme dans l'application d'origine (mêmes filtres,
+même sortie 44,1 kHz / 64 kbps).
+
+Taille du binaire : le ffmpeg embarqué alourdit sensiblement le
+téléchargement (≈100 Mo par archive). Windows ARM64 n'a pas de build
+statique disponible : sur cette plateforme l'application utilise le
+`ffmpeg` trouvé dans le PATH, et le traitement affiche un message clair
+si aucun n'est installé.
+
+La compilation nécessite les archives ffmpeg (go:embed) :
+
+```sh
+scripts/fetch-ffmpeg.sh all    # ou : make ffmpeg-bins (automatique via make build/dist)
+```
 
 ## Crédits
 

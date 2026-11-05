@@ -37,3 +37,6 @@ normmp3
 # Compilation et paquets
 build/
 dist/
+
+# ffmpeg statiques téléchargés (scripts/fetch-ffmpeg.sh)
+internal/ffmpeg/bin/
