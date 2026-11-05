@@ -103,6 +103,7 @@ func Run(version string) {
 }
 
 func RootView() {
+	handleQuitShortcut()
 	Container(Attrs(Viewport, UseSurface(SurfaceCanvas)), func() {
 		topBar()
 		Container(Attrs(Row, Grow(1), Expand, Gap(10), Pad2(10, 12), Clip), func() {
@@ -112,6 +113,18 @@ func RootView() {
 		bottomBar()
 	})
 	renderModals()
+}
+
+// handleQuitShortcut quits on the platform quit shortcut — Cmd+Q on macOS,
+// Ctrl+Q elsewhere — going through quitter so a running process asks for
+// confirmation before stopping. Consumed first thing in the frame so no
+// other widget can react to the key.
+func handleQuitShortcut() {
+	in := GetFrameInput()
+	if in.Key == KeyQ && GetInputState().Modifiers == PrimaryMod() {
+		in.Key = KeyCodeNone
+		quitter()
+	}
 }
 
 // ------------------------------------------------------------ status helpers
