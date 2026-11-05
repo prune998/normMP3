@@ -267,13 +267,18 @@ func TestWaveGainPaint(t *testing.T) {
 }
 
 func TestWaveOriginalPath(t *testing.T) {
-	if got := waveOriginalPath(&row{path: "/m/album/Fichiers_normalises/song.mp3"}); got != "/m/album/song.mp3" {
-		t.Fatalf("derived original = %q", got)
+	// built with filepath so the test passes on both POSIX and Windows
+	// path separators (the CI run broke on a hardcoded "/m/album/…")
+	root := filepath.Join(string(os.PathSeparator), "m", "album")
+	norm := filepath.Join(root, outDirName, "song.mp3")
+	if got := waveOriginalPath(&row{path: norm}); got != filepath.Join(root, "song.mp3") {
+		t.Fatalf("derived original = %q, want %q", got, filepath.Join(root, "song.mp3"))
 	}
-	if got := waveOriginalPath(&row{path: "/m/album/Fichiers_normalises/song.mp3", src: "/o/song.mp3"}); got != "/o/song.mp3" {
-		t.Fatalf("src override = %q", got)
+	src := filepath.Join(root, "other.mp3")
+	if got := waveOriginalPath(&row{path: norm, src: src}); got != src {
+		t.Fatalf("src override = %q, want %q", got, src)
 	}
-	if got := waveOriginalPath(&row{path: "/x/song.mp3"}); got != "" {
+	if got := waveOriginalPath(&row{path: filepath.Join(string(os.PathSeparator), "x", "song.mp3")}); got != "" {
 		t.Fatalf("row outside %s should have no original, got %q", outDirName, got)
 	}
 }
