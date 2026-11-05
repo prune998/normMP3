@@ -27,6 +27,7 @@ import (
 
 type row struct {
 	path   string
+	src    string // untouched original, when path is the normalized copy
 	name   string
 	size   int64
 	target float64
@@ -425,6 +426,9 @@ func selectionPanel() {
 					}
 					if IsClicked() {
 						S.plyr.Load(r.path)
+						if r.done {
+							openWaveCompare(r)
+						}
 					}
 					Icon(SymAudio, FontSize(13), TextColorVec(mutedText()))
 					Container(Attrs(Grow(1), Clip), func() {
@@ -606,6 +610,8 @@ func renderModals() {
 		})
 	case "browser":
 		renderBrowser()
+	case "wave":
+		renderWaveModal()
 	case "aide":
 		style := ModalStyleForScheme(CurrentColorScheme)
 		ModalStyled(720, closeModal, style, func() {
@@ -1040,7 +1046,7 @@ func choisirFichiers() {
 				showError("ERREUR", "Copie impossible: "+err.Error())
 				return
 			}
-			S.rows = append(S.rows, &row{path: dst, name: filepath.Base(dst)})
+			S.rows = append(S.rows, &row{path: dst, src: p, name: filepath.Base(dst)})
 		}
 	}
 	startAnalyse()
@@ -1217,6 +1223,7 @@ func startTraitement() {
 
 	go func() {
 		start := time.Now()
+		clearWaveCache()
 		var total int64
 		for _, r := range S.rows {
 			if fi, err := os.Stat(r.path); err == nil {
