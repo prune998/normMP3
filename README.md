@@ -49,6 +49,14 @@ list to load its normalized copy, then play/pause it and jump **±10
 seconds** with the seek buttons — no external player needed. (Double-click
 to open your system player is gone; the built-in player replaces it.)
 
+Once a file has been **processed**, clicking it also opens a **waveform
+comparison**: the original MP3 and its normalized copy are both decoded
+into peak/RMS envelopes and shown as two aligned lanes, with the levels,
+peaks, durations and clipping status side by side — a direct visual check
+of what the correction did. The **Diff view** overlays both waveforms and
+shows in **red** the level that normalization removed (segments shaved by
+the limiter or brought down), with the per-bucket gain curve underneath.
+
 The ID3v2 tags of the files (title, artist, album, artwork…) are
 carried over to the re-encoded files.
 

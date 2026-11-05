@@ -27,6 +27,7 @@ import (
 
 type row struct {
 	path   string
+	src    string // untouched original, when path is the normalized copy
 	name   string
 	size   int64
 	target float64
@@ -103,6 +104,7 @@ func Run(version string) {
 }
 
 func RootView() {
+	handleQuitShortcut()
 	Container(Attrs(Viewport, UseSurface(SurfaceCanvas)), func() {
 		topBar()
 		Container(Attrs(Row, Grow(1), Expand, Gap(10), Pad2(10, 12), Clip), func() {
@@ -112,6 +114,18 @@ func RootView() {
 		bottomBar()
 	})
 	renderModals()
+}
+
+// handleQuitShortcut quits on the platform quit shortcut — Cmd+Q on macOS,
+// Ctrl+Q elsewhere — going through quitter so a running process asks for
+// confirmation before stopping. Consumed first thing in the frame so no
+// other widget can react to the key.
+func handleQuitShortcut() {
+	in := GetFrameInput()
+	if in.Key == KeyQ && GetInputState().Modifiers == PrimaryMod() {
+		in.Key = KeyCodeNone
+		quitter()
+	}
 }
 
 // ------------------------------------------------------------ status helpers
@@ -412,6 +426,9 @@ func selectionPanel() {
 					}
 					if IsClicked() {
 						S.plyr.Load(r.path)
+						if r.done {
+							openWaveCompare(r)
+						}
 					}
 					Icon(SymAudio, FontSize(13), TextColorVec(mutedText()))
 					Container(Attrs(Grow(1), Clip), func() {
@@ -430,7 +447,7 @@ func selectionPanel() {
 			visibleScrollBar()
 		})
 		Container(Attrs(Row, CrossMid, Pad2(8, 12), Gap(6), Background(0, 0, 50, 0.04)), func() {
-			Label("Clic : écouter le fichier", FontSize(11), TextColorVec(mutedText()))
+			Label("Clic : écouter le fichier — s'il est traité : comparaison original / normalisé", FontSize(11), TextColorVec(mutedText()))
 		})
 		playerCard()
 	})
@@ -593,6 +610,8 @@ func renderModals() {
 		})
 	case "browser":
 		renderBrowser()
+	case "wave":
+		renderWaveModal()
 	case "aide":
 		style := ModalStyleForScheme(CurrentColorScheme)
 		ModalStyled(720, closeModal, style, func() {
@@ -626,11 +645,19 @@ func renderModals() {
 							"Cliquez sur un fichier de la liste « Sélection » pour l'écouter.",
 							"Les boutons -10 s et +10 s déplacent la lecture, et le bouton central "+
 								"démarre ou met en pause. La lecture porte sur le fichier normalisé "+
-								"depuis son dossier "+outDirName+".")
+								"depuis son dossier "+outDirName+".",
+							"Après le traitement, cliquer un fichier ouvre aussi la comparaison des "+
+								"formes d'onde : l'original et sa copie normalisée sont analysés et "+
+								"affichés côte à côte, avec les niveaux, les crêtes et les durées.",
+							"La vue « Différence » superpose les deux courbes et montre en rouge "+
+								"ce que la normalisation a retiré (segments rabotés par le limiteur "+
+								"ou baissés), avec la courbe de gain appliquée.")
 						helpSection("Bon à savoir",
 							"Les fichiers sont ré-encodés en 64 kbps (comme dans l'application d'origine).",
 							"Les balises ID3 (titre, artiste, pochette…) sont conservées.",
-							"L'analyse et le traitement peuvent être relancés autant de fois que besoin.")
+							"L'analyse et le traitement peuvent être relancés autant de fois que besoin.",
+							"Cmd+Q (macOS) ou Ctrl+Q (Linux, Windows) quitte l'application ; "+
+								"pendant un traitement, une confirmation est demandée.")
 					})
 					visibleScrollBar()
 				})
@@ -1019,7 +1046,7 @@ func choisirFichiers() {
 				showError("ERREUR", "Copie impossible: "+err.Error())
 				return
 			}
-			S.rows = append(S.rows, &row{path: dst, name: filepath.Base(dst)})
+			S.rows = append(S.rows, &row{path: dst, src: p, name: filepath.Base(dst)})
 		}
 	}
 	startAnalyse()
@@ -1196,6 +1223,7 @@ func startTraitement() {
 
 	go func() {
 		start := time.Now()
+		clearWaveCache()
 		var total int64
 		for _, r := range S.rows {
 			if fi, err := os.Stat(r.path); err == nil {

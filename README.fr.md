@@ -54,6 +54,15 @@ déplacement **±10 secondes** avec les boutons prévus — aucun lecteur
 externe nécessaire. (Le double clic vers le lecteur du système a été
 remplacé par ce lecteur intégré.)
 
+Une fois un fichier **traité**, cliquer dessus ouvre aussi une
+**comparaison des formes d'onde** : l'original et sa copie normalisée sont
+tous deux décodés en enveloppes crêtes/RMS et affichés sur deux pistes
+alignées, avec les niveaux, les crêtes, les durées et l'écrêtage côte à
+côte — une vérification visuelle directe de l'effet de la correction. La
+vue **Différence** superpose les deux courbes et montre en **rouge** ce
+que la normalisation a retiré (segments rabotés par le limiteur ou
+baissés), avec la courbe de gain en dessous.
+
 Les balises ID3v2 des fichiers (titre, artiste, album, pochette…) sont
 reportées sur les fichiers ré-encodés.
 
